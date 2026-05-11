@@ -36,6 +36,8 @@
 #include "src/utils/compiler.h"
 #include "src/utils/numeric.h"
 
+#include "libuwp.h"
+
 namespace dawn::native::d3d {
 
 namespace {
@@ -98,9 +100,9 @@ MaybeError PlatformFunctions::EnsureFXC(std::span<const std::string> searchPaths
         return {};
     }
 
-#if DAWN_PLATFORM_IS(WINUWP)
-    d3dCompile = &D3DCompile;
-    d3dDisassemble = &D3DDisassemble;
+#if DAWN_PLATFORM_IS(WINUWP) || 1
+    d3dCompile = &uwp_D3DCompile;
+    d3dDisassemble = &uwp_D3DDisassemble;
 #else
     std::string error;
 #if defined(DAWN_FORCE_SYSTEM_COMPONENT_LOAD)

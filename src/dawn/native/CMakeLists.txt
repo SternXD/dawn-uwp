@@ -35,6 +35,9 @@ DawnJSONGenerator(
     OUTPUT_SOURCES DAWN_NATIVE_UTILS_GEN_SOURCES
 )
 
+# todo: should be configurable
+add_compile_definitions(_UWP)
+
 set(headers
     "${DAWN_INCLUDE_DIR}/dawn/native/DawnNative.h"
     "${DAWN_INCLUDE_DIR}/dawn/native/dawn_native_export.h"
@@ -1096,7 +1099,10 @@ if (DAWN_BUILD_MONOLITHIC_LIBRARY)
         dawn_public_config
       PRIVATE
         ${conditional_private_platform_depends}
+        ${CMAKE_SOURCE_DIR}/uwp/libuwp.lib
     )
+
+    include_directories(${CMAKE_SOURCE_DIR}/uwp)
 
     set(webgpu_dawn_public_headers)
     foreach(dawn_target_name IN ITEMS dawn_headers dawncpp_headers dawn_native_objects)

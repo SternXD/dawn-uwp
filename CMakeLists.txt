@@ -39,6 +39,11 @@ project(
     HOMEPAGE_URL "https://dawn.googlesource.com/dawn"
     VERSION 0.0.0
 )
+
+# Force to /MT for xbox uwp compat
+set(CMAKE_MSVC_RUNTIME_LIBRARY MultiThreaded$<$<CONFIG:Debug>:Debug>)
+set(ABSL_MSVC_STATIC_RUNTIME ON CACHE BOOL "Link static runtime libraries" FORCE)
+
 enable_testing()
 
 list(INSERT CMAKE_MODULE_PATH 0 "${Dawn_SOURCE_DIR}/src/cmake")
