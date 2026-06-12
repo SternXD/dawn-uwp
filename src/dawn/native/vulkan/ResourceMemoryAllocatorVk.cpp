@@ -96,6 +96,14 @@ class ResourceMemoryAllocator::SingleTypeAllocator : public ResourceHeapAllocato
 
     // Implementation of the MemoryAllocator interface to be a client of BuddyMemoryAllocator
     ResultOrError<std::unique_ptr<ResourceHeapBase>> AllocateResourceHeap(uint64_t size) override {
+        return AllocateResourceHeapForImage(size, VK_NULL_HANDLE);
+    }
+
+    // Allocates a heap, dedicated to `dedicatedImage` (chaining
+    // VkMemoryDedicatedAllocateInfo) when it is not VK_NULL_HANDLE.
+    ResultOrError<std::unique_ptr<ResourceHeapBase>> AllocateResourceHeapForImage(
+        uint64_t size,
+        VkImage dedicatedImage) {
         if (size > mMaxHeapSize) {
             return DAWN_OUT_OF_MEMORY_ERROR("Allocation size too large");
         }
@@ -105,6 +113,15 @@ class ResourceMemoryAllocator::SingleTypeAllocator : public ResourceHeapAllocato
         allocateInfo.pNext = nullptr;
         allocateInfo.allocationSize = size;
         allocateInfo.memoryTypeIndex = mMemoryTypeIndex;
+
+        VkMemoryDedicatedAllocateInfo dedicatedInfo;
+        if (dedicatedImage != VK_NULL_HANDLE) {
+            dedicatedInfo.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO;
+            dedicatedInfo.pNext = nullptr;
+            dedicatedInfo.image = dedicatedImage;
+            dedicatedInfo.buffer = VK_NULL_HANDLE;
+            allocateInfo.pNext = &dedicatedInfo;
+        }
 
         VkDeviceMemory allocatedMemory = VK_NULL_HANDLE;
 
@@ -183,7 +200,8 @@ ResourceMemoryAllocator::~ResourceMemoryAllocator() = default;
 ResultOrError<ResourceMemoryAllocation> ResourceMemoryAllocator::Allocate(
     const VkMemoryRequirements& requirements,
     MemoryKind kind,
-    bool forceDisableSubAllocation) {
+    bool forceDisableSubAllocation,
+    VkImage dedicatedImage) {
     // The Vulkan spec guarantees at least one memory type is valid.
     int memoryType = FindBestTypeIndex(requirements, kind);
     bool isLazyMemoryType = mAllocatorsPerType[memoryType]->IsLazyMemoryType();
@@ -194,8 +212,13 @@ ResultOrError<ResourceMemoryAllocation> ResourceMemoryAllocator::Allocate(
     // Sub-allocate non-mappable resources because at the moment the mapped pointer
     // is part of the resource and not the heap, which doesn't match the Vulkan model.
     // TODO(crbug.com/dawn/849): allow sub-allocating mappable resources, maybe.
-    if (!forceDisableSubAllocation && requirements.size < mMaxSizeForSuballocation &&
-        !IsMemoryKindMappable(kind) &&
+    //
+    // Resources the driver asked to see in a dedicated allocation (dedicatedImage !=
+    // VK_NULL_HANDLE) must own their VkDeviceMemory: drivers use the dedicated image to
+    // pick memory layouts (e.g. framebuffer compression) that a shared heap cannot
+    // express.
+    if (!forceDisableSubAllocation && dedicatedImage == VK_NULL_HANDLE &&
+        requirements.size < mMaxSizeForSuballocation && !IsMemoryKindMappable(kind) &&
         !mDevice->IsToggleEnabled(Toggle::DisableResourceSuballocation)) {
         // When sub-allocating, Vulkan requires that we respect bufferImageGranularity. Some
         // hardware puts information on the memory's page table entry and allocating a linear
@@ -232,7 +255,8 @@ ResultOrError<ResourceMemoryAllocation> ResourceMemoryAllocator::Allocate(
 
     // If sub-allocation failed, allocate memory just for it.
     std::unique_ptr<ResourceHeapBase> resourceHeap;
-    DAWN_TRY_ASSIGN(resourceHeap, mAllocatorsPerType[memoryType]->AllocateResourceHeap(size));
+    DAWN_TRY_ASSIGN(resourceHeap, mAllocatorsPerType[memoryType]->AllocateResourceHeapForImage(
+                                      size, dedicatedImage));
 
     void* mappedPointer = nullptr;
     if (IsMemoryKindMappable(kind)) {

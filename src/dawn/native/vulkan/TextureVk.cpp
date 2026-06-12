@@ -1553,9 +1553,29 @@ MaybeError InternalTexture::Initialize(VkImageUsageFlags extraUsages) {
         device->fn.CreateImage(device->GetVkDevice(), &createInfo, nullptr, &*mHandle),
         "CreateImage"));
 
-    // Create the image memory and associate it with the container
-    VkMemoryRequirements requirements;
-    device->fn.GetImageMemoryRequirements(device->GetVkDevice(), mHandle, &requirements);
+    // Create the image memory and associate it with the container.  Query the dedicated
+    // requirements alongside: drivers gate memory layouts like framebuffer compression on
+    // owning the allocation, and report that as prefersDedicatedAllocation.
+    VkImageMemoryRequirementsInfo2 requirementsInfo;
+    requirementsInfo.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_REQUIREMENTS_INFO_2;
+    requirementsInfo.pNext = nullptr;
+    requirementsInfo.image = mHandle;
+
+    VkMemoryDedicatedRequirements dedicatedRequirements;
+    dedicatedRequirements.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS;
+    dedicatedRequirements.pNext = nullptr;
+
+    VkMemoryRequirements2 requirements2;
+    requirements2.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2;
+    requirements2.pNext = &dedicatedRequirements;
+
+    device->fn.GetImageMemoryRequirements2(device->GetVkDevice(), &requirementsInfo,
+                                           &requirements2);
+
+    VkImage dedicatedImage = (dedicatedRequirements.requiresDedicatedAllocation ||
+                              dedicatedRequirements.prefersDedicatedAllocation)
+                                 ? mHandle
+                                 : VkImage{};
 
     bool forceDisableSubAllocation =
         (device->IsToggleEnabled(
@@ -1565,8 +1585,10 @@ MaybeError InternalTexture::Initialize(VkImageUsageFlags extraUsages) {
     auto memoryKind = (GetInternalUsage() & wgpu::TextureUsage::TransientAttachment)
                           ? MemoryKind::LazilyAllocated
                           : MemoryKind::DeviceLocal;
-    DAWN_TRY_ASSIGN(mMemoryAllocation, device->GetResourceMemoryAllocator()->Allocate(
-                                           requirements, memoryKind, forceDisableSubAllocation));
+    DAWN_TRY_ASSIGN(mMemoryAllocation,
+                    device->GetResourceMemoryAllocator()->Allocate(
+                        requirements2.memoryRequirements, memoryKind, forceDisableSubAllocation,
+                        dedicatedImage));
 
     DAWN_TRY(CheckVkSuccess(
         device->fn.BindImageMemory(device->GetVkDevice(), mHandle,

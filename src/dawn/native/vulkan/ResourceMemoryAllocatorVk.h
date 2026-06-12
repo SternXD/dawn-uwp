@@ -55,9 +55,12 @@ class ResourceMemoryAllocator {
     ResourceMemoryAllocator(Device* device, VkDeviceSize heapBlockSize, QueueBase* queue);
     ~ResourceMemoryAllocator();
 
+    // `dedicatedImage`, when not VK_NULL_HANDLE, requests a dedicated VkDeviceMemory for
+    // that image (VkMemoryDedicatedAllocateInfo), bypassing sub-allocation.
     ResultOrError<ResourceMemoryAllocation> Allocate(const VkMemoryRequirements& requirements,
                                                      MemoryKind kind,
-                                                     bool forceDisableSubAllocation = false);
+                                                     bool forceDisableSubAllocation = false,
+                                                     VkImage dedicatedImage = VK_NULL_HANDLE);
     void Deallocate(ResourceMemoryAllocation* allocation);
 
     void FreeRecycledMemory();
