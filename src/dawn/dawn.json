@@ -3984,6 +3984,15 @@
             {"name": "window", "type": "uint32_t"}
         ]
     },
+    "surface source switch NWindow": {
+        "category": "structure",
+        "chained": "in",
+        "chain roots": ["surface descriptor"],
+        "tags": ["native"],
+        "members": [
+            {"name": "window", "type": "void", "annotation": "*"}
+        ]
+    },
     "surface source xlib window": {
         "category": "structure",
         "chained": "in",
@@ -4085,6 +4094,7 @@
             {"value": 14, "name": "external texture binding entry"},
             {"value": 15, "name": "compatibility mode limits"},
             {"value": 16, "name": "texture binding view dimension"},
+            {"value": 17, "name": "surface source switch NWindow"},
 
             {"value": 0, "name": "emscripten surface source canvas HTML selector", "tags": ["emscripten"]},
 

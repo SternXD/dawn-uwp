@@ -47,6 +47,7 @@ enum class InstanceExt : uint32_t {
     XcbSurface,
     XlibSurface,
     AndroidSurface,
+    ViSurface,
 
     // Others
     DebugUtils,

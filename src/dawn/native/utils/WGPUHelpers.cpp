@@ -49,6 +49,18 @@
 
 namespace dawn::native::utils {
 
+namespace {
+
+size_t BoundedStrlen(const char* str, size_t maxLength) {
+    const void* nul = std::memchr(str, '\0', maxLength);
+    if (nul == nullptr) {
+        return maxLength;
+    }
+    return static_cast<const char*>(nul) - str;
+}
+
+}  // namespace
+
 ResultOrError<Ref<ShaderModuleBase>> CreateShaderModule(
     DeviceBase* device,
     const char* source,
@@ -236,7 +248,7 @@ std::string_view NormalizeMessageString(StringView in) {
     if (in.IsUndefined()) {
         return {};
     }
-    return std::string_view(in.data, DAWN_UNSAFE_TODO(strnlen(in.data, in.length)));
+    return std::string_view(in.data, DAWN_UNSAFE_TODO(BoundedStrlen(in.data, in.length)));
 }
 
 }  // namespace dawn::native::utils

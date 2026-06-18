@@ -39,6 +39,7 @@
 #endif
 #elif DAWN_PLATFORM_IS(POSIX)
 #include <dlfcn.h>
+#elif DAWN_PLATFORM_IS(SWITCH)
 #else
 #error "Unsupported platform for DynamicLib"
 #endif
@@ -106,6 +107,12 @@ bool DynamicLib::Open(const std::string& filename, std::string* error) {
     if (mHandle == nullptr && error != nullptr) {
         *error = dlerror();
     }
+#elif DAWN_PLATFORM_IS(SWITCH)
+    (void)filename;
+    if (error != nullptr) {
+        *error = "Dynamic library loading is unavailable on Switch";
+    }
+    mHandle = nullptr;
 #else
 #error "Unsupported platform for DynamicLib"
 #endif
@@ -130,6 +137,12 @@ bool DynamicLib::OpenLoaded(const std::string& filename, std::string* error) {
     if (mHandle == nullptr && error != nullptr) {
         *error = dlerror();
     }
+#elif DAWN_PLATFORM_IS(SWITCH)
+    (void)filename;
+    if (error != nullptr) {
+        *error = "Dynamic library loading is unavailable on Switch";
+    }
+    mHandle = nullptr;
 #else
 #error "Unsupported platform for DynamicLib"
 #endif
@@ -167,6 +180,7 @@ void DynamicLib::Close() {
 #endif
 #elif DAWN_PLATFORM_IS(POSIX)
         dlclose(mHandle);
+#elif DAWN_PLATFORM_IS(SWITCH)
 #else
 #error "Unsupported platform for DynamicLib"
 #endif
@@ -190,6 +204,11 @@ void* DynamicLib::GetProc(const std::string& procName, std::string* error) const
 
     if (proc == nullptr && error != nullptr) {
         *error = dlerror();
+    }
+#elif DAWN_PLATFORM_IS(SWITCH)
+    (void)procName;
+    if (error != nullptr) {
+        *error = "Dynamic symbol lookup is unavailable on Switch";
     }
 #else
 #error "Unsupported platform for DynamicLib"

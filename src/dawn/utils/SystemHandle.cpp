@@ -36,7 +36,7 @@
 #include "src/utils/windows_with_undefs.h"
 #elif DAWN_PLATFORM_IS(FUCHSIA)
 #include <zircon/syscalls.h>
-#elif DAWN_PLATFORM_IS(POSIX)
+#elif DAWN_PLATFORM_IS(POSIX) || DAWN_PLATFORM_IS(SWITCH)
 #include <unistd.h>
 #endif
 
@@ -86,7 +86,7 @@ inline void CloseHandle(zx_handle_t handle) {
     DAWN_CHECK(status == ZX_OK);
 }
 
-#elif DAWN_PLATFORM_IS(POSIX)
+#elif DAWN_PLATFORM_IS(POSIX) || DAWN_PLATFORM_IS(SWITCH)
 
 constexpr inline int kInvalidHandle = -1;
 

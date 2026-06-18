@@ -46,6 +46,8 @@
 #include <mach-o/dyld.h>
 
 #include <vector>
+#elif DAWN_PLATFORM_IS(SWITCH)
+#include <cstdlib>
 #endif
 
 #include <array>
@@ -85,7 +87,7 @@ std::pair<std::string, bool> GetEnvironmentVar(const char* variableName) {
 bool SetEnvironmentVar(const char* variableName, const char* value) {
     return SetEnvironmentVariableA(variableName, value) == TRUE;
 }
-#elif DAWN_PLATFORM_IS(POSIX)
+#elif DAWN_PLATFORM_IS(POSIX) || DAWN_PLATFORM_IS(SWITCH)
 const char* GetPathSeparator() {
     return "/";
 }
@@ -97,10 +99,16 @@ std::pair<std::string, bool> GetEnvironmentVar(const char* variableName) {
 }
 
 bool SetEnvironmentVar(const char* variableName, const char* value) {
+#if DAWN_PLATFORM_IS(SWITCH)
+    (void)variableName;
+    (void)value;
+    return false;
+#else
     if (value == nullptr) {
         return unsetenv(variableName) == 0;
     }
     return setenv(variableName, value, 1) == 0;
+#endif
 }
 #else
 #error "Implement Get/SetEnvironmentVar for your platform."
@@ -149,6 +157,10 @@ std::optional<std::string> GetExecutablePath() {
     return {};
 }
 #elif DAWN_PLATFORM_IS(EMSCRIPTEN)
+std::optional<std::string> GetExecutablePath() {
+    return {};
+}
+#elif DAWN_PLATFORM_IS(SWITCH)
 std::optional<std::string> GetExecutablePath() {
     return {};
 }
@@ -203,6 +215,10 @@ std::optional<std::string> GetModulePath() {
     return {};
 }
 #elif DAWN_PLATFORM_IS(EMSCRIPTEN)
+std::optional<std::string> GetModulePath() {
+    return {};
+}
+#elif DAWN_PLATFORM_IS(SWITCH)
 std::optional<std::string> GetModulePath() {
     return {};
 }

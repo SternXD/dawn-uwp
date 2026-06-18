@@ -35,6 +35,12 @@
 
 namespace dawn::native::vulkan {
 
+#if DAWN_PLATFORM_IS(SWITCH)
+extern "C" {
+VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vk_icdGetInstanceProcAddr(VkInstance instance, const char* pName);
+}
+#endif  // DAWN_PLATFORM_IS(SWITCH)
+
 namespace {
 
 #if DAWN_NO_SANITIZE_VK_FN
@@ -89,9 +95,18 @@ F AsVkFn(void(VKAPI_PTR* addr)()) {
     } while (0)
 
 MaybeError VulkanFunctions::LoadGlobalProcs(const DynamicLib& vulkanLib) {
+#if DAWN_PLATFORM_IS(SWITCH)
+    (void)vulkanLib;
+    GetInstanceProcAddr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(
+        vk_icdGetInstanceProcAddr(VK_NULL_HANDLE, "vkGetInstanceProcAddr"));
+    if (GetInstanceProcAddr == nullptr) {
+        GetInstanceProcAddr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(&vk_icdGetInstanceProcAddr);
+    }
+#else
     if (!vulkanLib.GetProc(&GetInstanceProcAddr, "vkGetInstanceProcAddr")) {
         return DAWN_INTERNAL_ERROR("Couldn't get vkGetInstanceProcAddr");
     }
+#endif  // DAWN_PLATFORM_IS(SWITCH)
 
     GET_GLOBAL_PROC(CreateInstance);
     GET_GLOBAL_PROC(EnumerateInstanceExtensionProperties);
@@ -218,6 +233,12 @@ MaybeError VulkanFunctions::LoadInstanceProcs(VkInstance instance,
     }
 #endif  // defined(DAWN_USE_X11)
 
+#if defined(VK_USE_PLATFORM_VI_NN)
+    if (globalInfo.HasExt(InstanceExt::ViSurface)) {
+        GET_INSTANCE_PROC(CreateViSurfaceNN);
+    }
+#endif  // defined(VK_USE_PLATFORM_VI_NN)
+
     // Some device extensions expose instance procs to query information from the vkPhysicalDevice.
     // Always try loading them as we don't know yet what extensions are available on the device.
     // The more proper solution to load them only if the extension is available would require
@@ -236,6 +257,26 @@ MaybeError VulkanFunctions::LoadInstanceProcs(VkInstance instance,
         if (name == nullptr) {                                                       \
             return DAWN_INTERNAL_ERROR(std::string("Couldn't get proc vk") + #name); \
         }                                                                            \
+    } while (0)
+
+#define GET_DEVICE_PROC_ALIAS(name, alias)                                                   \
+    do {                                                                                      \
+        name = AsVkFn<PFN_vk##name>(GetDeviceProcAddr(device, "vk" #name));                   \
+        if (name == nullptr) {                                                                \
+            name = AsVkFn<PFN_vk##name>(GetDeviceProcAddr(device, "vk" #alias));              \
+        }                                                                                     \
+        if (name == nullptr) {                                                                \
+            return DAWN_INTERNAL_ERROR(std::string("Couldn't get proc vk") + #name + " or vk" + \
+                                       #alias);                                               \
+        }                                                                                     \
+    } while (0)
+
+#define GET_DEVICE_PROC_ALIAS_NO_ERROR(name, alias)                             \
+    do {                                                                        \
+        name = AsVkFn<PFN_vk##name>(GetDeviceProcAddr(device, "vk" #name));     \
+        if (name == nullptr) {                                                  \
+            name = AsVkFn<PFN_vk##name>(GetDeviceProcAddr(device, "vk" #alias)); \
+        }                                                                       \
     } while (0)
 
 MaybeError VulkanFunctions::LoadDeviceProcs(VkInstance instance,
@@ -363,22 +404,47 @@ MaybeError VulkanFunctions::LoadDeviceProcs(VkInstance instance,
     GET_DEVICE_PROC(WaitForFences);
 
     // Promoted in 1.1
-    GET_DEVICE_PROC(BindBufferMemory2);
-    GET_DEVICE_PROC(BindImageMemory2);
-    GET_DEVICE_PROC(CmdDispatchBase);
-    GET_DEVICE_PROC(CmdSetDeviceMask);
-    GET_DEVICE_PROC(CreateDescriptorUpdateTemplate);
-    GET_DEVICE_PROC(CreateSamplerYcbcrConversion);
-    GET_DEVICE_PROC(DestroyDescriptorUpdateTemplate);
-    GET_DEVICE_PROC(DestroySamplerYcbcrConversion);
-    GET_DEVICE_PROC(GetBufferMemoryRequirements2);
-    GET_DEVICE_PROC(GetDescriptorSetLayoutSupport);
-    GET_DEVICE_PROC(GetDeviceGroupPeerMemoryFeatures);
+    GET_DEVICE_PROC_ALIAS(BindBufferMemory2, BindBufferMemory2KHR);
+    GET_DEVICE_PROC_ALIAS(BindImageMemory2, BindImageMemory2KHR);
+    GET_DEVICE_PROC_ALIAS(CmdDispatchBase, CmdDispatchBaseKHR);
+    GET_DEVICE_PROC_ALIAS(CmdSetDeviceMask, CmdSetDeviceMaskKHR);
+#if DAWN_PLATFORM_IS(SWITCH)
+    GET_DEVICE_PROC_ALIAS_NO_ERROR(CreateDescriptorUpdateTemplate,
+                                   CreateDescriptorUpdateTemplateKHR);
+#else
+    GET_DEVICE_PROC_ALIAS(CreateDescriptorUpdateTemplate, CreateDescriptorUpdateTemplateKHR);
+#endif
+#if DAWN_PLATFORM_IS(SWITCH)
+    GET_DEVICE_PROC_ALIAS_NO_ERROR(CreateSamplerYcbcrConversion,
+                                   CreateSamplerYcbcrConversionKHR);
+#else
+    GET_DEVICE_PROC_ALIAS(CreateSamplerYcbcrConversion, CreateSamplerYcbcrConversionKHR);
+#endif
+#if DAWN_PLATFORM_IS(SWITCH)
+    GET_DEVICE_PROC_ALIAS_NO_ERROR(DestroyDescriptorUpdateTemplate,
+                                   DestroyDescriptorUpdateTemplateKHR);
+#else
+    GET_DEVICE_PROC_ALIAS(DestroyDescriptorUpdateTemplate, DestroyDescriptorUpdateTemplateKHR);
+#endif
+#if DAWN_PLATFORM_IS(SWITCH)
+    GET_DEVICE_PROC_ALIAS_NO_ERROR(DestroySamplerYcbcrConversion,
+                                   DestroySamplerYcbcrConversionKHR);
+#else
+    GET_DEVICE_PROC_ALIAS(DestroySamplerYcbcrConversion, DestroySamplerYcbcrConversionKHR);
+#endif
+    GET_DEVICE_PROC_ALIAS(GetBufferMemoryRequirements2, GetBufferMemoryRequirements2KHR);
+    GET_DEVICE_PROC_ALIAS(GetDescriptorSetLayoutSupport, GetDescriptorSetLayoutSupportKHR);
+    GET_DEVICE_PROC_ALIAS(GetDeviceGroupPeerMemoryFeatures, GetDeviceGroupPeerMemoryFeaturesKHR);
     GET_DEVICE_PROC(GetDeviceQueue2);
-    GET_DEVICE_PROC(GetImageMemoryRequirements2);
-    GET_DEVICE_PROC(GetImageSparseMemoryRequirements2);
-    GET_DEVICE_PROC(TrimCommandPool);
-    GET_DEVICE_PROC(UpdateDescriptorSetWithTemplate);
+    GET_DEVICE_PROC_ALIAS(GetImageMemoryRequirements2, GetImageMemoryRequirements2KHR);
+    GET_DEVICE_PROC_ALIAS(GetImageSparseMemoryRequirements2, GetImageSparseMemoryRequirements2KHR);
+    GET_DEVICE_PROC_ALIAS(TrimCommandPool, TrimCommandPoolKHR);
+#if DAWN_PLATFORM_IS(SWITCH)
+    GET_DEVICE_PROC_ALIAS_NO_ERROR(UpdateDescriptorSetWithTemplate,
+                                   UpdateDescriptorSetWithTemplateKHR);
+#else
+    GET_DEVICE_PROC_ALIAS(UpdateDescriptorSetWithTemplate, UpdateDescriptorSetWithTemplateKHR);
+#endif
 
     // Promoted in 1.2
     if (deviceInfo.HasExt(DeviceExt::DrawIndirectCount)) {

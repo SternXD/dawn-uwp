@@ -84,6 +84,7 @@ class Surface final : public ErrorMonad {
         WindowsCoreWindow,
         WindowsUWPSwapChainPanel,
         WindowsWinUISwapChainPanel,
+        SwitchNWindow,
         XlibWindow,
     };
     Type GetType() const;
@@ -112,6 +113,9 @@ class Surface final : public ErrorMonad {
 
     // Valid to call if the type is WindowsWinUISwapChainPanel
     IUnknown* GetWinUISwapChainPanel() const;
+
+    // Valid to call if the type is SwitchNWindow
+    void* GetSwitchNWindow() const;
 
     // Valid to call if the type is WindowsXlib
     void* GetXDisplay() const;
@@ -159,6 +163,9 @@ class Surface final : public ErrorMonad {
 
     // ANativeWindow
     raw_ptr<void> mAndroidNativeWindow = nullptr;
+
+    // NWindow
+    raw_ptr<void> mSwitchNWindow = nullptr;
 
     // Wayland
     raw_ptr<void> mWaylandDisplay = nullptr;

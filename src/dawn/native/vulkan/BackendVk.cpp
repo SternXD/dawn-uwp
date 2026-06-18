@@ -69,6 +69,8 @@ constexpr char kVulkanLibName[] = "vulkan-1.dll";
 constexpr char kVulkanLibName[] = "libvulkan.dylib";
 #elif DAWN_PLATFORM_IS(FUCHSIA)
 constexpr char kVulkanLibName[] = "libvulkan.so";
+#elif DAWN_PLATFORM_IS(SWITCH)
+constexpr char kVulkanLibName[] = "";
 #else
 #error "Unimplemented Vulkan backend platform"
 #endif
@@ -366,7 +368,9 @@ MaybeError VulkanInstance::Initialize(const InstanceBase* instance, ICD icd) {
 
     switch (icd) {
         case ICD::None: {
-            DAWN_TRY(LoadVulkan(kVulkanLibName));
+            if constexpr (kVulkanLibName[0] != '\0') {
+                DAWN_TRY(LoadVulkan(kVulkanLibName));
+            }
             // Succesfully loaded driver; break.
             break;
         }

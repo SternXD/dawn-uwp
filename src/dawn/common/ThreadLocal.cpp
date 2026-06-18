@@ -29,6 +29,10 @@
 
 #include <atomic>
 
+#if defined(__SWITCH__)
+#include <pthread.h>
+#endif
+
 #include "absl/base/no_destructor.h"
 #include "absl/container/flat_hash_set.h"
 #include "src/dawn/common/MutexProtected.h"
@@ -44,6 +48,28 @@ auto& GetAliveThreads() {
     static absl::NoDestructor<MutexProtected<absl::flat_hash_set<ThreadUniqueId>>> sThreadUniqueIds;
     return *sThreadUniqueIds;
 }
+
+struct ThreadRef {
+    ThreadUniqueId mThreadUniqueId;
+
+    explicit ThreadRef(ThreadUniqueId ThreadUniqueId) : mThreadUniqueId(ThreadUniqueId) {
+        GetAliveThreads()->insert(mThreadUniqueId);
+    }
+    ~ThreadRef() { GetAliveThreads()->erase(mThreadUniqueId); }
+};
+
+#if defined(__SWITCH__)
+pthread_key_t gSwitchThreadRefKey;
+pthread_once_t gSwitchThreadRefKeyOnce = PTHREAD_ONCE_INIT;
+
+void DestroySwitchThreadRef(void* value) {
+    delete static_cast<ThreadRef*>(value);
+}
+
+void InitSwitchThreadRefKey() {
+    pthread_key_create(&gSwitchThreadRefKey, DestroySwitchThreadRef);
+}
+#endif
 }  // anonymous namespace
 
 ThreadUniqueId GetThreadUniqueId() {
@@ -54,18 +80,22 @@ ThreadUniqueId GetThreadUniqueId() {
     // ThreadUniqueId from a globally static set of "running" ThreadUniqueIds. This allows us to
     // check whether a ThreadUniqueId is still running since thread_local variables are destroyed
     // when a thread is terminated.
-    struct ThreadRef {
-        ThreadUniqueId mThreadUniqueId;
-
-        explicit ThreadRef(ThreadUniqueId ThreadUniqueId) : mThreadUniqueId(ThreadUniqueId) {
-            GetAliveThreads()->insert(mThreadUniqueId);
-        }
-        ~ThreadRef() { GetAliveThreads()->erase(mThreadUniqueId); }
-    };
+#if defined(__SWITCH__)
+    // libnx/static PIE currently crashes in this code path when using C++ thread_local with a
+    // destructor. Use pthread TLS so Dawn error-scope routing can run after backend errors.
+    pthread_once(&gSwitchThreadRefKeyOnce, InitSwitchThreadRefKey);
+    ThreadRef* threadRef = static_cast<ThreadRef*>(pthread_getspecific(gSwitchThreadRefKey));
+    if (threadRef == nullptr) {
+        threadRef = new ThreadRef(sNextThreadUniqueId++);
+        pthread_setspecific(gSwitchThreadRefKey, threadRef);
+    }
+    return threadRef->mThreadUniqueId;
+#else
     // This ThreadRef is initialized the first time GetThreadUniqueId is called for each thread (see
     // https://stackoverflow.com/a/49821006), and destroyed when the thread terminates.
     static thread_local ThreadRef sThreadRef(sNextThreadUniqueId++);
     return sThreadRef.mThreadUniqueId;
+#endif
 }
 
 bool IsThreadAlive(ThreadUniqueId ThreadUniqueId) {

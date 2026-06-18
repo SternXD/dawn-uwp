@@ -665,6 +665,27 @@ ResultOrError<VkSurfaceKHR> CreateVulkanSurface(InstanceBase* instance,
 
 #endif  // DAWN_PLATFORM_IS(ANDROID)
 
+#if DAWN_PLATFORM_IS(SWITCH)
+        case Surface::Type::SwitchNWindow: {
+            if (info.HasExt(InstanceExt::ViSurface)) {
+                DAWN_ASSERT(surface->GetSwitchNWindow() != nullptr);
+
+                VkViSurfaceCreateInfoNN createInfo;
+                createInfo.sType = VK_STRUCTURE_TYPE_VI_SURFACE_CREATE_INFO_NN;
+                createInfo.pNext = nullptr;
+                createInfo.flags = 0;
+                createInfo.window = surface->GetSwitchNWindow();
+
+                VkSurfaceKHR vkSurface = VK_NULL_HANDLE;
+                DAWN_TRY(CheckVkSuccess(
+                    fn.CreateViSurfaceNN(vkInstance, &createInfo, nullptr, &*vkSurface),
+                    "CreateViSurfaceNN"));
+                return vkSurface;
+            }
+            break;
+        }
+#endif  // DAWN_PLATFORM_IS(SWITCH)
+
 #if defined(DAWN_USE_WAYLAND)
         case Surface::Type::WaylandSurface: {
             if (info.HasExt(InstanceExt::WaylandSurface)) {

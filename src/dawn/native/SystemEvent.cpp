@@ -37,7 +37,7 @@
 #elif DAWN_PLATFORM_IS(FUCHSIA)
 #include <poll.h>
 #include <unistd.h>
-#elif DAWN_PLATFORM_IS(POSIX)
+#elif DAWN_PLATFORM_IS(POSIX) || DAWN_PLATFORM_IS(SWITCH)
 #include <sys/poll.h>
 #include <unistd.h>
 #endif
@@ -87,7 +87,7 @@ void SystemEventPipeSender::Signal() && {
         bool success = SetEvent(mPrimitive.Get());
         DAWN_CHECK(success);
     }
-#elif DAWN_PLATFORM_IS(POSIX)
+#elif DAWN_PLATFORM_IS(POSIX) || DAWN_PLATFORM_IS(SWITCH)
     {
         // Send one byte to signal the receiver
         char zero[1] = {0};
@@ -117,7 +117,7 @@ std::pair<SystemEventPipeSender, SystemEventReceiver> CreateSystemEventPipe() {
     sender.mPrimitive = std::move(eventDup);
 
     return std::make_pair(std::move(sender), std::move(receiver));
-#elif DAWN_PLATFORM_IS(POSIX)
+#elif DAWN_PLATFORM_IS(POSIX) || DAWN_PLATFORM_IS(SWITCH)
     int pipeFds[2];
     int status = pipe(pipeFds);
     DAWN_CHECK(status >= 0);

@@ -33,6 +33,8 @@
 #include "src/utils/windows_with_undefs.h"
 #elif DAWN_PLATFORM_IS(POSIX)
 #include <unistd.h>
+#elif DAWN_PLATFORM_IS(SWITCH)
+#include <time.h>
 #else
 #error "Unsupported platform."
 #endif
@@ -46,6 +48,14 @@ void USleep(unsigned int usecs) {
 #elif DAWN_PLATFORM_IS(POSIX)
 void USleep(unsigned int usecs) {
     usleep(usecs);
+}
+#elif DAWN_PLATFORM_IS(SWITCH)
+void USleep(unsigned int usecs) {
+    timespec req = {
+        static_cast<time_t>(usecs / 1000000),
+        static_cast<long>((usecs % 1000000) * 1000),
+    };
+    nanosleep(&req, nullptr);
 }
 #else
 #error "Implement USleep for your platform."

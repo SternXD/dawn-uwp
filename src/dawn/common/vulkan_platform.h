@@ -186,6 +186,12 @@ const HandleType* AsVkArray(const detail::VkHandle<Tag, HandleType>* handle) {
 #endif
 #endif  // DAWN_PLATFORM_IS(FUCHSIA)
 
+#if DAWN_PLATFORM_IS(SWITCH)
+#ifndef VK_USE_PLATFORM_VI_NN
+#define VK_USE_PLATFORM_VI_NN
+#endif
+#endif  // DAWN_PLATFORM_IS(SWITCH)
+
 // The actual inclusion of vulkan.h!
 #define VK_NO_PROTOTYPES
 #include <vulkan/vulkan.h>

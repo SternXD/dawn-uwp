@@ -43,6 +43,44 @@ endif ()
 
 set(ABSL_ROOT_DIR ${DAWN_ABSEIL_DIR})
 if (NOT TARGET absl::strings)
+    if (DAWN_PLATFORM_SWITCH)
+        set(_dawn_switch_abseil_patch "${Dawn_SOURCE_DIR}/patches/abseil-cpp.patch")
+        if (EXISTS "${_dawn_switch_abseil_patch}")
+            find_program(PATCH_EXECUTABLE patch)
+            if (NOT PATCH_EXECUTABLE)
+                message(FATAL_ERROR "DAWN_PLATFORM_SWITCH requires patch to apply ${_dawn_switch_abseil_patch}")
+            endif ()
+
+            execute_process(
+                COMMAND ${PATCH_EXECUTABLE} -p1 -d "${DAWN_ABSEIL_DIR}" -R --dry-run -s -f
+                INPUT_FILE "${_dawn_switch_abseil_patch}"
+                RESULT_VARIABLE _dawn_switch_abseil_patch_reversed
+                OUTPUT_QUIET
+                ERROR_QUIET)
+            if (_dawn_switch_abseil_patch_reversed EQUAL 0)
+                message(STATUS "Dawn: Switch Abseil patch already applied")
+            else ()
+                execute_process(
+                    COMMAND ${PATCH_EXECUTABLE} -p1 -d "${DAWN_ABSEIL_DIR}" --dry-run -s -f
+                    INPUT_FILE "${_dawn_switch_abseil_patch}"
+                    RESULT_VARIABLE _dawn_switch_abseil_patch_check
+                    OUTPUT_QUIET
+                    ERROR_QUIET)
+                if (NOT _dawn_switch_abseil_patch_check EQUAL 0)
+                    message(FATAL_ERROR "Dawn: Switch Abseil patch does not apply cleanly: ${_dawn_switch_abseil_patch}")
+                endif ()
+                message(STATUS "Dawn: Applying Switch Abseil patch")
+                execute_process(
+                    COMMAND ${PATCH_EXECUTABLE} -p1 -d "${DAWN_ABSEIL_DIR}" -s -f
+                    INPUT_FILE "${_dawn_switch_abseil_patch}"
+                    RESULT_VARIABLE _dawn_switch_abseil_patch_result)
+                if (NOT _dawn_switch_abseil_patch_result EQUAL 0)
+                    message(FATAL_ERROR "Dawn: Failed to apply Switch Abseil patch: ${_dawn_switch_abseil_patch}")
+                endif ()
+            endif ()
+        endif ()
+    endif ()
+
     # Recommended setting for compatibility with future abseil releases.
     set(ABSL_PROPAGATE_CXX_STD ON CACHE BOOL "" FORCE)
     message(STATUS "Dawn: using Abseil at ${DAWN_ABSEIL_DIR}")
@@ -371,4 +409,3 @@ endif()
 if (TINT_BUILD_MESA)
     add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/mesa" "${CMAKE_CURRENT_BINARY_DIR}/mesa")
 endif()
-

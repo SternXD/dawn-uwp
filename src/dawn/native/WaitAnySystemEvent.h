@@ -39,7 +39,7 @@
 #elif DAWN_PLATFORM_IS(FUCHSIA)
 #include <poll.h>
 #include <unistd.h>
-#elif DAWN_PLATFORM_IS(POSIX)
+#elif DAWN_PLATFORM_IS(POSIX) || DAWN_PLATFORM_IS(SWITCH)
 #include <sys/poll.h>
 #include <unistd.h>
 #endif
@@ -65,7 +65,7 @@ T ToMillisecondsGeneric(Nanoseconds timeout) {
 
 #if DAWN_PLATFORM_IS(WINDOWS)
 #define ToMilliseconds ToMillisecondsGeneric<DWORD, INFINITE>
-#elif DAWN_PLATFORM_IS(POSIX)
+#elif DAWN_PLATFORM_IS(POSIX) || DAWN_PLATFORM_IS(SWITCH)
 #define ToMilliseconds ToMillisecondsGeneric<int, -1>
 #endif
 
@@ -96,7 +96,7 @@ template <typename It>
 
     *(*(DAWN_UNSAFE_TODO(begin + completedIndex))).second = true;
     return true;
-#elif DAWN_PLATFORM_IS(POSIX)
+#elif DAWN_PLATFORM_IS(POSIX) || DAWN_PLATFORM_IS(SWITCH)
     absl::InlinedVector<pollfd, 4 /* avoid heap allocation for small waits */> pollfds;
     pollfds.reserve(count);
     for (auto it = begin; it != end; DAWN_UNSAFE_TODO(++it)) {

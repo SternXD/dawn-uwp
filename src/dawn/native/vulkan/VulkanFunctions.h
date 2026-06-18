@@ -199,6 +199,11 @@ struct VulkanFunctions {
         GetPhysicalDeviceXcbPresentationSupportKHR = nullptr;
 #endif  // defined(DAWN_USE_X11)
 
+#if defined(VK_USE_PLATFORM_VI_NN)
+    // NN_vi_surface
+    VkFn<PFN_vkCreateViSurfaceNN> CreateViSurfaceNN = nullptr;
+#endif  // defined(VK_USE_PLATFORM_VI_NN)
+
     // ---------- Instance procs for device extensions
 
     // VK_KHR_cooperative_matrix

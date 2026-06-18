@@ -116,7 +116,10 @@ std::string TextGenerator::TextBuffer::String(uint32_t indent /* = 0 */) const {
 
 std::string TextGenerator::TextBuffer::MinifiedString() const {
     /// Returns `true` if @p c is the start of an identifier codepoint.
-    auto is_ident_char = [](char c) { return std::isalnum(c) || c == '_' || !isascii(c); };
+    auto is_ident_char = [](char c) {
+        const auto byte = static_cast<unsigned char>(c);
+        return std::isalnum(byte) || c == '_' || byte > 0x7f;
+    };
 
     bool previous_is_ident = false;
     bool in_whitespace = false;
@@ -124,7 +127,7 @@ std::string TextGenerator::TextBuffer::MinifiedString() const {
     for (const auto& line : lines) {
         for (uint32_t i = 0; i < line.content.length();) {
             auto c = line.content.at(i);
-            if (std::isspace(c)) {
+            if (std::isspace(static_cast<unsigned char>(c))) {
                 // Track that we are in whitespace but do not emit anything.
                 // We will emit a whitespace character if the next non-whitespace character would
                 // combine with the previous whitespace character to form an incorrect token.

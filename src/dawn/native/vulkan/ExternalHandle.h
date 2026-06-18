@@ -39,7 +39,7 @@ const ExternalSemaphoreHandle kNullExternalSemaphoreHandle = nullptr;
 #elif DAWN_PLATFORM_IS(FUCHSIA)
 using ExternalSemaphoreHandle = zx_handle_t;
 const ExternalSemaphoreHandle kNullExternalSemaphoreHandle = ZX_HANDLE_INVALID;
-#elif DAWN_PLATFORM_IS(POSIX)
+#elif DAWN_PLATFORM_IS(POSIX) || DAWN_PLATFORM_IS(SWITCH)
 using ExternalSemaphoreHandle = int;
 const ExternalSemaphoreHandle kNullExternalSemaphoreHandle = -1;
 #else

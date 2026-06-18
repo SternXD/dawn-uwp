@@ -82,6 +82,9 @@ absl::FormatConvertResult<absl::FormatConversionCharSet::kString> AbslFormatConv
         case Surface::Type::WindowsWinUISwapChainPanel:
             s->Append("WindowsWinUISwapChainPanel");
             break;
+        case Surface::Type::SwitchNWindow:
+            s->Append("SwitchNWindow");
+            break;
         case Surface::Type::XlibWindow:
             s->Append("XlibWindow");
             break;
@@ -116,6 +119,7 @@ ResultOrError<UnpackedPtr<SurfaceDescriptor>> ValidateSurfaceDescriptor(
                   Branch<SurfaceSourceWindowsHWND>, Branch<SurfaceDescriptorFromWindowsCoreWindow>,
                   Branch<SurfaceDescriptorFromWindowsUWPSwapChainPanel>,
                   Branch<SurfaceDescriptorFromWindowsWinUISwapChainPanel>,
+                  Branch<SurfaceSourceSwitchNWindow>,
                   Branch<SurfaceSourceXlibWindow>, Branch<SurfaceSourceWaylandSurface>>()));
     switch (type) {
 #if DAWN_PLATFORM_IS(ANDROID)
@@ -177,6 +181,14 @@ ResultOrError<UnpackedPtr<SurfaceDescriptor>> ValidateSurfaceDescriptor(
             return descriptor;
         }
 #endif  // defined(DAWN_USE_WINDOWS_UI)
+#if DAWN_PLATFORM_IS(SWITCH)
+        case wgpu::SType::SurfaceSourceSwitchNWindow: {
+            auto* subDesc = descriptor.Get<SurfaceSourceSwitchNWindow>();
+            DAWN_ASSERT(subDesc != nullptr);
+            DAWN_INVALID_IF(subDesc->window == nullptr, "Switch NWindow is nullptr.");
+            return descriptor;
+        }
+#endif  // DAWN_PLATFORM_IS(SWITCH)
 #if defined(DAWN_USE_WAYLAND)
         case wgpu::SType::SurfaceSourceWaylandSurface: {
             auto* subDesc = descriptor.Get<SurfaceSourceWaylandSurface>();
@@ -305,6 +317,7 @@ Surface::Surface(InstanceBase* instance, const UnpackedPtr<SurfaceDescriptor>& d
                 Branch<SurfaceSourceWindowsHWND>, Branch<SurfaceDescriptorFromWindowsCoreWindow>,
                 Branch<SurfaceDescriptorFromWindowsUWPSwapChainPanel>,
                 Branch<SurfaceDescriptorFromWindowsWinUISwapChainPanel>,
+                Branch<SurfaceSourceSwitchNWindow>,
                 Branch<SurfaceSourceXlibWindow>, Branch<SurfaceSourceWaylandSurface>>()
             .AcquireSuccess();
     switch (type) {
@@ -347,6 +360,12 @@ Surface::Surface(InstanceBase* instance, const UnpackedPtr<SurfaceDescriptor>& d
             break;
         }
 #endif  // defined(DAWN_USE_WINDOWS_UI)
+        case wgpu::SType::SurfaceSourceSwitchNWindow: {
+            auto* subDesc = descriptor.Get<SurfaceSourceSwitchNWindow>();
+            mType = Type::SwitchNWindow;
+            mSwitchNWindow = subDesc->window;
+            break;
+        }
         case wgpu::SType::SurfaceSourceWaylandSurface: {
             auto* subDesc = descriptor.Get<SurfaceSourceWaylandSurface>();
             mType = Type::WaylandSurface;
@@ -451,6 +470,12 @@ IUnknown* Surface::GetWinUISwapChainPanel() const {
 #else
     return nullptr;
 #endif
+}
+
+void* Surface::GetSwitchNWindow() const {
+    DAWN_CHECK(!IsError());
+    DAWN_CHECK(mType == Type::SwitchNWindow);
+    return mSwitchNWindow;
 }
 
 void* Surface::GetXDisplay() const {

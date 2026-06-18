@@ -37,7 +37,7 @@
 
 #if DAWN_PLATFORM_IS(WINDOWS)
 #include "partition_alloc/pointers/raw_ptr.h"
-#elif DAWN_PLATFORM_IS(POSIX)
+#elif DAWN_PLATFORM_IS(POSIX) || DAWN_PLATFORM_IS(SWITCH)
 #include "partition_alloc/pointers/raw_ptr_exclusion.h"
 #else
 #error "Unsupported platform for DynamicLib"
@@ -84,7 +84,7 @@ class DynamicLib {
     // This is an HMODULE (aka void*). It should point to real memory, so we can use raw_ptr:
     // > A handle to a module. This is the base address of the module in memory.
     raw_ptr<void> mHandle = nullptr;
-#elif DAWN_PLATFORM_IS(POSIX)
+#elif DAWN_PLATFORM_IS(POSIX) || DAWN_PLATFORM_IS(SWITCH)
     // On POSIX we use `dlopen`, which returns a "handle" which may not be a real pointer:
     // > The value of this symbol table handle should not be interpreted in any way by the caller.
     RAW_PTR_EXCLUSION void* mHandle = nullptr;

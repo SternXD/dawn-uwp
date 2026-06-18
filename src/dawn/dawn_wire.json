@@ -258,7 +258,8 @@
             "SurfaceSourceXlibWindow",
             "SurfaceSourceWaylandSurface",
             "SurfaceSourceAndroidNativeWindow",
-            "SurfaceSourceXCBWindow"
+            "SurfaceSourceXCBWindow",
+            "SurfaceSourceSwitchNWindow"
         ],
         "client_side_commands": [
             "AdapterCreateDevice",

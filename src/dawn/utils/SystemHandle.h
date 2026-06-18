@@ -44,7 +44,7 @@ class SystemHandle : public NonCopyable {
     using Handle = void*;
 #elif DAWN_PLATFORM_IS(FUCHSIA)
     using Handle = uint32_t;
-#elif DAWN_PLATFORM_IS(POSIX)
+#elif DAWN_PLATFORM_IS(POSIX) || DAWN_PLATFORM_IS(SWITCH)
     using Handle = int;
 #else
 #error "Platform not supported."

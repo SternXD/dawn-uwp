@@ -49,6 +49,7 @@ static constexpr std::array<InstanceExtInfo, kInstanceExtCount> sInstanceExtInfo
     {InstanceExt::XcbSurface, "VK_KHR_xcb_surface"},
     {InstanceExt::XlibSurface, "VK_KHR_xlib_surface"},
     {InstanceExt::AndroidSurface, "VK_KHR_android_surface"},
+    {InstanceExt::ViSurface, "VK_NN_vi_surface"},
 
     {InstanceExt::DebugUtils, "VK_EXT_debug_utils"},
     {InstanceExt::ValidationFeatures, "VK_EXT_validation_features"},
@@ -102,6 +103,7 @@ InstanceExtSet EnsureDependencies(const InstanceExtSet& advertisedExts) {
             case InstanceExt::Win32Surface:
             case InstanceExt::XcbSurface:
             case InstanceExt::XlibSurface:
+            case InstanceExt::ViSurface:
                 hasDependencies = HasDep(InstanceExt::Surface);
                 break;
 
