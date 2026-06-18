@@ -28,8 +28,10 @@
 #include "src/dawn/native/vulkan/ResourceMemoryAllocatorVk.h"
 
 #include <algorithm>
+#include <string>
 #include <utility>
 
+#include "absl/strings/str_format.h"
 #include "partition_alloc/pointers/raw_ptr.h"
 #include "src/dawn/common/Math.h"
 #include "src/dawn/native/BuddyMemoryAllocator.h"
@@ -202,10 +204,24 @@ ResultOrError<ResourceMemoryAllocation> ResourceMemoryAllocator::Allocate(
     MemoryKind kind,
     bool forceDisableSubAllocation,
     VkImage dedicatedImage) {
-    // The Vulkan spec guarantees at least one memory type is valid.
+    // The Vulkan spec guarantees at least one memory type is valid for the
+    // *spec-mandated* kinds, but FindBestTypeIndex can still return -1 for
+    // kinds whose required flags no advertised type carries. Indexing with -1
+    // is UB (reads adjacent heap as a pointer); fail with the inputs instead.
     int memoryType = FindBestTypeIndex(requirements, kind);
+    if (memoryType < 0) {
+        const auto& types = mDevice->GetDeviceInfo().memoryTypes;
+        std::string desc;
+        for (size_t i = 0; i < types.size(); ++i) {
+            desc += absl::StrFormat(" type[%u]=0x%x", static_cast<uint32_t>(i),
+                                    types[i].propertyFlags);
+        }
+        return DAWN_INTERNAL_ERROR(
+            absl::StrFormat("No compatible memory type: kind=0x%x typeBits=0x%x size=%llu;%s",
+                            static_cast<uint32_t>(kind), requirements.memoryTypeBits,
+                            static_cast<unsigned long long>(requirements.size), desc.c_str()));
+    }
     bool isLazyMemoryType = mAllocatorsPerType[memoryType]->IsLazyMemoryType();
-    DAWN_ASSERT(memoryType >= 0);
 
     VkDeviceSize size = requirements.size;
 
