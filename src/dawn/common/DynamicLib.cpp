@@ -45,6 +45,28 @@
 #endif
 
 namespace dawn {
+namespace {
+
+#if DAWN_PLATFORM_IS(WINDOWS) && !DAWN_PLATFORM_IS(WINUWP) && \
+    !defined(DAWN_FORCE_SYSTEM_COMPONENT_LOAD)
+bool IsWindowsPathSeparator(char character) {
+    return character == '\\' || character == '/';
+}
+
+bool IsAsciiAlpha(char character) {
+    return (character >= 'A' && character <= 'Z') || (character >= 'a' && character <= 'z');
+}
+
+bool IsFullyQualifiedWindowsPath(const std::string& path) {
+    const bool isDrivePath = path.size() >= 3 && IsAsciiAlpha(path[0]) && path[1] == ':' &&
+                             IsWindowsPathSeparator(path[2]);
+    const bool isUncPath =
+        path.size() >= 2 && IsWindowsPathSeparator(path[0]) && IsWindowsPathSeparator(path[1]);
+    return isDrivePath || isUncPath;
+}
+#endif
+
+}  // anonymous namespace
 
 DynamicLib::~DynamicLib() {
     Close();
@@ -91,9 +113,12 @@ bool DynamicLib::Open(const std::string& filename, std::string* error) {
 #if defined(DAWN_FORCE_SYSTEM_COMPONENT_LOAD)
     const DWORD loadLibraryFlags = LOAD_LIBRARY_SEARCH_SYSTEM32;
 #else
-    // Use SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS to avoid DLL search path attacks.
-    const DWORD loadLibraryFlags =
-        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS;
+    // LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR requires a fully qualified path. Bare library names use
+    // the secure default search directories without searching the current working directory.
+    DWORD loadLibraryFlags = LOAD_LIBRARY_SEARCH_DEFAULT_DIRS;
+    if (IsFullyQualifiedWindowsPath(filename)) {
+        loadLibraryFlags |= LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR;
+    }
 #endif
     mHandle = LoadLibraryExA(filename.c_str(), nullptr, loadLibraryFlags);
 #endif
