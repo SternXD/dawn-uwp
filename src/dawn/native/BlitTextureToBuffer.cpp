@@ -985,12 +985,11 @@ ResultOrError<Ref<ComputePipelineBase>> GetOrCreateTextureToBufferPipeline(
                                                    },
                                                    /* allowInternalBinding */ true));
 
-        std::array<BindGroupLayoutBase*, 2> bindGroupLayouts = {bindGroupLayout0.Get(),
-                                                                bindGroupLayout1.Get()};
+        ityp::array<BindGroupIndex, BindGroupLayoutBase*, 2u> bindGroupLayouts = {
+            bindGroupLayout0.Get(), bindGroupLayout1.Get()};
 
         PipelineLayoutDescriptor descriptor;
-        descriptor.bindGroupLayoutCount = bindGroupLayouts.size();
-        descriptor.bindGroupLayouts = bindGroupLayouts.data();
+        descriptor.bindGroupLayouts = bindGroupLayouts;
         DAWN_TRY_ASSIGN(pipelineLayout, device->CreatePipelineLayout(&descriptor));
     } else {
         DAWN_TRY_ASSIGN(pipelineLayout, utils::MakeBasicPipelineLayout(device, bindGroupLayout0));
@@ -1012,8 +1011,7 @@ ResultOrError<Ref<ComputePipelineBase>> GetOrCreateTextureToBufferPipeline(
         {nullptr, "workgroupSizeY", static_cast<double>(adjustedWorkGroupSizeY)},
         {nullptr, "gOutputUnitSize", static_cast<double>(outputUnitSize)},
     }};
-    computePipelineDescriptor.compute.constantCount = constants.size();
-    computePipelineDescriptor.compute.constants = constants.data();
+    computePipelineDescriptor.compute.constants = constants;
 
     Ref<ComputePipelineBase> pipeline;
     DAWN_TRY_ASSIGN(pipeline, device->CreateComputePipeline(&computePipelineDescriptor));
@@ -1140,13 +1138,13 @@ MaybeError BlitTextureToBuffer(DeviceBase* device,
         switch (bytesPerTexel) {
             case 1:
                 // One thread is responsible for writing four texel values (x, y) ~ (x+3, y).
-                workgroupCountX =
-                    Align(texelCopyWidth, 4 * kWorkgroupSizeX) / (4 * kWorkgroupSizeX);
+                workgroupCountX = Align(texelCopyWidth, static_cast<size_t>(4) * kWorkgroupSizeX) /
+                                  (static_cast<size_t>(4) * kWorkgroupSizeX);
                 break;
             case 2:
                 // One thread is responsible for writing two texel values (x, y) and (x+1, y).
-                workgroupCountX =
-                    Align(texelCopyWidth, 2 * kWorkgroupSizeX) / (2 * kWorkgroupSizeX);
+                workgroupCountX = Align(texelCopyWidth, static_cast<size_t>(2) * kWorkgroupSizeX) /
+                                  (static_cast<size_t>(2) * kWorkgroupSizeX);
                 break;
             case 4:
             case 8:
@@ -1206,7 +1204,8 @@ MaybeError BlitTextureToBuffer(DeviceBase* device,
             // We only need to initialize the last 4 bytes in the temp buffer.
             std::array<uint8_t, 4> clearData = {};
             commandEncoder->APIWriteBuffer(destinationBuffer.Get(),
-                                           destinationBuffer->GetSize() - 4, clearData.data(), 4);
+                                           destinationBuffer->GetSize() - 4,
+                                           SpanAsBytes(Span<const uint8_t>(clearData)));
         }
 
         // Copy the bytes that we won't write in the shader (those before offset, padding bytes,
@@ -1252,8 +1251,8 @@ MaybeError BlitTextureToBuffer(DeviceBase* device,
             DAWN_TRY_ASSIGN(uniformBuffer, device->CreateBuffer(&bufferDesc));
         }
 
-        uint32_t* params =
-            static_cast<uint32_t*>(uniformBuffer->GetMappedRange(0, bufferDesc.size));
+        uint32_t* params = static_cast<uint32_t*>(
+            uniformBuffer->GetMappedRange(0, checked_cast<size_t>(bufferDesc.size)));
         // srcOrigin: vec3u
         params[0] = dchecked_cast<uint32_t>(src.origin.x);
         DAWN_UNSAFE_TODO(params[1]) = dchecked_cast<uint32_t>(src.origin.y);

@@ -25,6 +25,7 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+#include <array>
 #include <memory>
 #include <ostream>
 #include <sstream>
@@ -1714,11 +1715,11 @@ TEST_P(CaptureAndReplayTests, CaptureQuerySetBasic) {
         queue.WriteBuffer(resolveBuffer, 0, sentinels.data(), size);
 
         {
-            wgpu::CommandBuffer commands;
+            wgpu::CommandBuffer resolveCommands;
             wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
             encoder.ResolveQuerySet(qs, 0, kNumQueries, resolveBuffer, 0);
-            commands = encoder.Finish();
-            queue.Submit(1, &commands);
+            resolveCommands = encoder.Finish();
+            queue.Submit(1, &resolveCommands);
         }
 
         EXPECT_BUFFER(
@@ -2325,7 +2326,7 @@ TEST_P(CaptureAndReplayTests, CaptureDepth24Plus) {
 
             wgpu::RenderPipeline pipeline = device.CreateRenderPipeline(&desc);
 
-            wgpu::CommandBuffer commands;
+            wgpu::CommandBuffer setupCommands;
             wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
             for (uint32_t layer = 0; layer < kNumLayers; ++layer) {
                 wgpu::TextureViewDescriptor viewDesc;
@@ -2342,13 +2343,13 @@ TEST_P(CaptureAndReplayTests, CaptureDepth24Plus) {
                 pass.Draw(3, 1, 0, layer);
                 pass.End();
             }
-            commands = encoder.Finish();
-            queue.Submit(1, &commands);
+            setupCommands = encoder.Finish();
+            queue.Submit(1, &setupCommands);
         }
 
         wgpu::ComputePipelineDescriptor csDesc;
         csDesc.compute.module = module;
-        wgpu::ComputePipeline cPipeline = device.CreateComputePipeline(&csDesc);
+        wgpu::ComputePipeline computePipeline = device.CreateComputePipeline(&csDesc);
 
         // Copy texture to temp buffer via compute shader during capture.
         // We don't care about the temp buffer. We just care that texture is
@@ -2359,19 +2360,19 @@ TEST_P(CaptureAndReplayTests, CaptureDepth24Plus) {
                 CreateBuffer("temp", sizeof(float) * kNumLayers,
                              wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopySrc);
             wgpu::BindGroup bindGroup =
-                utils::MakeBindGroup(device, cPipeline.GetBindGroupLayout(0),
+                utils::MakeBindGroup(device, computePipeline.GetBindGroupLayout(0),
                                      {
                                          {0, texture.CreateView()},
                                          {1, tempBuffer},
                                      });
 
             wgpu::ComputePassEncoder pass = encoder.BeginComputePass();
-            pass.SetPipeline(cPipeline);
+            pass.SetPipeline(computePipeline);
             pass.SetBindGroup(0, bindGroup);
             pass.DispatchWorkgroups(kNumLayers);
             pass.End();
         }
-        return std::make_pair(cPipeline, encoder.Finish());
+        return std::make_pair(computePipeline, encoder.Finish());
     }();
 
     // --- capture ---
@@ -2401,15 +2402,15 @@ TEST_P(CaptureAndReplayTests, CaptureDepth24Plus) {
         pass.DispatchWorkgroups(kNumLayers);
         pass.End();
 
-        wgpu::CommandBuffer commands = encoder.Finish();
-        queue.Submit(1, &commands);
+        wgpu::CommandBuffer replayCommands = encoder.Finish();
+        queue.Submit(1, &replayCommands);
     }
 
-    float expected[kNumLayers];
+    std::array<float, kNumLayers> expected;
     for (uint32_t i = 0; i < kNumLayers; ++i) {
         DAWN_UNSAFE_TODO(expected[i]) = (i + 0.5f) / 6.f;
     }
-    EXPECT_BUFFER_FLOAT_RANGE_TOLERANCE_EQ(expected, result, 0, 6, 0.05);
+    EXPECT_BUFFER_FLOAT_RANGE_TOLERANCE_EQ(expected.data(), result, 0, 6, 0.05);
 }
 
 // Test that you can not copy Depth24plus/Depth24PlusStencil8 depth aspect
@@ -2781,9 +2782,22 @@ class CaptureAndReplaySurfaceTests : public CaptureAndReplayTests {
         CaptureAndReplayTests::TearDown();
 
         mWindow.reset();
+        mReplayWindow.reset();
         glfwTerminate();
     }
+
+    // Creates a window for a replay surface. DXGI only allows one flip-model swapchain per HWND at
+    // a time, so the replay surface cannot reuse the same window as the capture surface while the
+    // latter is still configured. The window is owned by the fixture so it outlives the surface.
+    GLFWwindow* CreateReplayWindow() {
+        glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+        mReplayWindow.reset(
+            glfwCreateWindow(1, 1, "CaptureAndReplaySurfaceTests replay", nullptr, nullptr));
+        return mReplayWindow.get();
+    }
+
     std::unique_ptr<GLFWwindow, GLFWindowDestroyer> mWindow;
+    std::unique_ptr<GLFWwindow, GLFWindowDestroyer> mReplayWindow;
 };
 
 TEST_P(CaptureAndReplaySurfaceTests, TestSurface) {
@@ -2821,7 +2835,8 @@ TEST_P(CaptureAndReplaySurfaceTests, TestSurface) {
     EXPECT_EQ(surfaceInfos[0].width, 1u);
     EXPECT_EQ(surfaceInfos[0].height, 1u);
 
-    wgpu::Surface replaySurface = wgpu::glfw::CreateSurfaceForWindow(instance, mWindow.get());
+    wgpu::Surface replaySurface =
+        wgpu::glfw::CreateSurfaceForWindow(instance, CreateReplayWindow());
 
     recorder->SetSurfaces({replaySurface});
 
@@ -2872,7 +2887,8 @@ TEST_P(CaptureAndReplaySurfaceTests, MultiFrame) {
     // --- replay ---
     recorder->EndCapture();
 
-    wgpu::Surface replaySurface = wgpu::glfw::CreateSurfaceForWindow(instance, mWindow.get());
+    wgpu::Surface replaySurface =
+        wgpu::glfw::CreateSurfaceForWindow(instance, CreateReplayWindow());
 
     recorder->SetSurfaces({replaySurface});
     auto replay = recorder->CreateReplay(device);

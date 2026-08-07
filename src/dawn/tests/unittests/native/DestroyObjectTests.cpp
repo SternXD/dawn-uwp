@@ -114,8 +114,7 @@ class DestroyObjectTests : public DawnMockTest {
 TEST_F(DestroyObjectTests, BindGroupNativeExplicit) {
     BindGroupDescriptor desc = {};
     desc.layout = mDeviceMock->GetEmptyBindGroupLayout();
-    desc.entryCount = 0;
-    desc.entries = nullptr;
+    desc.entries = {};
 
     Ref<BindGroupMock> bindGroupMock = AcquireRef(new BindGroupMock(mDeviceMock, Unpack(&desc)));
     EXPECT_CALL(*bindGroupMock.Get(), DestroyImpl).Times(1);
@@ -130,8 +129,7 @@ TEST_F(DestroyObjectTests, BindGroupNativeExplicit) {
 TEST_F(DestroyObjectTests, BindGroupImplicit) {
     BindGroupDescriptor desc = {};
     desc.layout = mDeviceMock->GetEmptyBindGroupLayout();
-    desc.entryCount = 0;
-    desc.entries = nullptr;
+    desc.entries = {};
 
     Ref<BindGroupMock> bindGroupMock = AcquireRef(new BindGroupMock(mDeviceMock, Unpack(&desc)));
     EXPECT_CALL(*bindGroupMock.Get(), DestroyImpl).Times(1);
@@ -152,8 +150,7 @@ TEST_F(DestroyObjectTests, BindGroupLayoutNativeExplicit) {
     std::vector<BindGroupLayoutEntry> entries;
     entries.push_back(utils::BindingLayoutEntryInitializationHelper(
         0, wgpu::ShaderStage::Compute, wgpu::BufferBindingType::Uniform));
-    desc.entryCount = entries.size();
-    desc.entries = entries.data();
+    desc.entries = entries;
 
     Ref<BindGroupLayoutMock> bindGroupLayoutMock =
         AcquireRef(new BindGroupLayoutMock(mDeviceMock, Unpack(&desc)));
@@ -172,8 +169,7 @@ TEST_F(DestroyObjectTests, BindGroupLayoutImplicit) {
     std::vector<BindGroupLayoutEntry> entries;
     entries.push_back(utils::BindingLayoutEntryInitializationHelper(
         0, wgpu::ShaderStage::Compute, wgpu::BufferBindingType::Uniform));
-    desc.entryCount = entries.size();
-    desc.entries = entries.data();
+    desc.entries = entries;
 
     Ref<BindGroupLayoutMock> bindGroupLayoutMock =
         AcquireRef(new BindGroupLayoutMock(mDeviceMock, Unpack(&desc)));
@@ -384,7 +380,7 @@ TEST_F(DestroyObjectTests, ExternalTextureNativeExplicit) {
         AcquireRef(new NiceMock<TextureViewMock>(textureMock.Get(), Unpack(&textureViewDesc)));
 
     ExternalTextureDescriptor desc = {};
-    std::array<float, 12> placeholderConstantArray;
+    std::array<float, 12> placeholderConstantArray = {};
     desc.yuvToRgbConversionMatrix = placeholderConstantArray.data();
     desc.gamutConversionMatrix = placeholderConstantArray.data();
     desc.srcTransferFunctionParameters = placeholderConstantArray.data();
@@ -415,7 +411,7 @@ TEST_F(DestroyObjectTests, ExternalTextureApiExplicit) {
         AcquireRef(new NiceMock<TextureViewMock>(textureMock.Get(), Unpack(&textureViewDesc)));
 
     ExternalTextureDescriptor desc = {};
-    std::array<float, 12> placeholderConstantArray;
+    std::array<float, 12> placeholderConstantArray = {};
     desc.yuvToRgbConversionMatrix = placeholderConstantArray.data();
     desc.gamutConversionMatrix = placeholderConstantArray.data();
     desc.srcTransferFunctionParameters = placeholderConstantArray.data();
@@ -450,7 +446,7 @@ TEST_F(DestroyObjectTests, ExternalTextureImplicit) {
         AcquireRef(new NiceMock<TextureViewMock>(textureMock.Get(), Unpack(&textureViewDesc)));
 
     ExternalTextureDescriptor desc = {};
-    std::array<float, 12> placeholderConstantArray;
+    std::array<float, 12> placeholderConstantArray = {};
     desc.yuvToRgbConversionMatrix = placeholderConstantArray.data();
     desc.gamutConversionMatrix = placeholderConstantArray.data();
     desc.srcTransferFunctionParameters = placeholderConstantArray.data();
@@ -473,11 +469,9 @@ TEST_F(DestroyObjectTests, ExternalTextureImplicit) {
 }
 
 TEST_F(DestroyObjectTests, PipelineLayoutNativeExplicit) {
+    BindGroupLayoutBase* bgl = mDeviceMock->GetEmptyBindGroupLayout();
     PipelineLayoutDescriptor desc = {};
-    std::vector<BindGroupLayoutBase*> bindGroupLayouts;
-    bindGroupLayouts.push_back(mDeviceMock->GetEmptyBindGroupLayout());
-    desc.bindGroupLayoutCount = bindGroupLayouts.size();
-    desc.bindGroupLayouts = bindGroupLayouts.data();
+    desc.bindGroupLayouts = SpanFromRef<BindGroupIndex>(bgl);
 
     Ref<PipelineLayoutMock> pipelineLayoutMock =
         AcquireRef(new PipelineLayoutMock(mDeviceMock, &desc));
@@ -500,8 +494,7 @@ TEST_F(DestroyObjectTests, PipelineLayoutImplicit) {
         std::vector<BindGroupLayoutEntry> entries;
         entries.push_back(utils::BindingLayoutEntryInitializationHelper(
             0, wgpu::ShaderStage::Compute, wgpu::BufferBindingType::Uniform));
-        desc.entryCount = entries.size();
-        desc.entries = entries.data();
+        desc.entries = entries;
 
         ScopedRawPtrExpectation scoped(mDeviceMock);
         bindGroupLayoutMock = AcquireRef(new BindGroupLayoutMock(mDeviceMock, Unpack(&desc)));
@@ -509,11 +502,9 @@ TEST_F(DestroyObjectTests, PipelineLayoutImplicit) {
         bindGroupLayout = device.CreateBindGroupLayout(ToCppAPI(&desc));
     }
 
+    BindGroupLayoutBase* bgl = FromAPI(bindGroupLayout.Get());
     PipelineLayoutDescriptor desc = {};
-    std::vector<BindGroupLayoutBase*> bindGroupLayouts;
-    bindGroupLayouts.push_back(reinterpret_cast<BindGroupLayoutBase*>(bindGroupLayout.Get()));
-    desc.bindGroupLayoutCount = bindGroupLayouts.size();
-    desc.bindGroupLayouts = bindGroupLayouts.data();
+    desc.bindGroupLayouts = SpanFromRef<BindGroupIndex>(bgl);
 
     Ref<PipelineLayoutMock> pipelineLayoutMock =
         AcquireRef(new PipelineLayoutMock(mDeviceMock, &desc));
@@ -820,8 +811,7 @@ TEST_F(DestroyObjectTests, DestroyObjectsApiExplicit) {
     {
         BindGroupDescriptor desc = {};
         desc.layout = mDeviceMock->GetEmptyBindGroupLayout();
-        desc.entryCount = 0;
-        desc.entries = nullptr;
+        desc.entries = {};
 
         ScopedRawPtrExpectation scoped(mDeviceMock);
         bindGroupMock = AcquireRef(new BindGroupMock(mDeviceMock, Unpack(&desc)));
@@ -838,8 +828,7 @@ TEST_F(DestroyObjectTests, DestroyObjectsApiExplicit) {
         std::vector<BindGroupLayoutEntry> entries;
         entries.push_back(utils::BindingLayoutEntryInitializationHelper(
             0, wgpu::ShaderStage::Compute, wgpu::BufferBindingType::Uniform));
-        desc.entryCount = entries.size();
-        desc.entries = entries.data();
+        desc.entries = entries;
 
         ScopedRawPtrExpectation scoped(mDeviceMock);
         bindGroupLayoutMock = AcquireRef(new BindGroupLayoutMock(mDeviceMock, Unpack(&desc)));
@@ -923,11 +912,9 @@ TEST_F(DestroyObjectTests, DestroyObjectsApiExplicit) {
     {
         // Use an non-empty bind group layout to avoid hitting the internal empty pipeline layout in
         // the cache.
+        BindGroupLayoutBase* bgl = FromAPI(bindGroupLayout.Get());
         PipelineLayoutDescriptor desc = {};
-        std::vector<BindGroupLayoutBase*> bindGroupLayouts;
-        bindGroupLayouts.push_back(reinterpret_cast<BindGroupLayoutBase*>(bindGroupLayout.Get()));
-        desc.bindGroupLayoutCount = bindGroupLayouts.size();
-        desc.bindGroupLayouts = bindGroupLayouts.data();
+        desc.bindGroupLayouts = SpanFromRef<BindGroupIndex>(bgl);
 
         ScopedRawPtrExpectation scoped(mDeviceMock);
         pipelineLayoutMock = AcquireRef(new PipelineLayoutMock(mDeviceMock, &desc));
@@ -1002,7 +989,7 @@ TEST_F(DestroyObjectTests, DestroyObjectsApiExplicit) {
     wgpu::ExternalTexture externalTexture;
     {
         ExternalTextureDescriptor desc = {};
-        std::array<float, 12> placeholderConstantArray;
+        std::array<float, 12> placeholderConstantArray = {};
         desc.yuvToRgbConversionMatrix = placeholderConstantArray.data();
         desc.gamutConversionMatrix = placeholderConstantArray.data();
         desc.srcTransferFunctionParameters = placeholderConstantArray.data();

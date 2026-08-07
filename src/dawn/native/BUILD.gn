@@ -91,6 +91,7 @@ config("vulkan_utility_libraries_include") {
 dawn_json_generator("utils_gen") {
   target = "native_utils"
   inputs = [
+    "${dawn_root}/src/dawn/dawn_native.json",
     "${dawn_template_dir}/dawn/cpp_macros.tmpl",
     "${dawn_template_dir}/dawn/native/api_absl_format.cpp",
     "${dawn_template_dir}/dawn/native/api_absl_format.h",
@@ -231,7 +232,7 @@ source_set("sources") {
   # FooBackend.cpp need to be public deps so they are propagated to the
   # dawn native target
   public_deps = [
-    "${dawn_root}:abseil",
+    "${dawn_abseil_dir}:absl",
     "${dawn_root}/src/dawn/partition_alloc:raw_ptr",
     "${dawn_root}/src/dawn/platform",
   ]
@@ -365,6 +366,7 @@ source_set("sources") {
     "ObjectContentHasher.cpp",
     "ObjectContentHasher.h",
     "ObjectLabel.h",
+    "PassResourceUsage.cpp",
     "PassResourceUsage.h",
     "PassResourceUsageTracker.cpp",
     "PassResourceUsageTracker.h",
@@ -913,7 +915,7 @@ source_set("sources") {
       "opengl/UtilsGL.h",
       "opengl/opengl_platform.h",
     ]
-    include_dirs += [ "//third_party/EGL-Registry" ]
+    include_dirs += [ "${dawn_root}/third_party/EGL-Registry" ]
   }
 
   if (dawn_enable_vulkan) {
@@ -1017,6 +1019,7 @@ source_set("sources") {
         "vulkan/external_semaphore/SemaphoreServiceImplementationFD.h",
       ]
       if (is_android) {
+        libs += [ "android" ]
         sources += [
           "vulkan/external_memory/MemoryServiceImplementationAHardwareBuffer.cpp",
           "vulkan/external_memory/MemoryServiceImplementationAHardwareBuffer.h",

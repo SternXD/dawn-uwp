@@ -60,6 +60,7 @@
 #include "src/dawn/native/d3d11/TextureD3D11.h"
 #include "src/dawn/native/d3d11/UtilsD3D11.h"
 #include "src/utils/compiler.h"
+#include "src/utils/numeric.h"
 
 namespace dawn::native::d3d11 {
 namespace {
@@ -94,7 +95,7 @@ class VertexBufferTracker {
         }
 
         mD3D11Buffers[slot] = buffer;
-        mOffsets[slot] = offset;
+        mOffsets[slot] = checked_cast<unsigned int>(offset);
 
         mDirtyVertexBuffers.set(slot);
     }
@@ -110,7 +111,8 @@ class VertexBufferTracker {
                     continue;
                 }
 
-                mStrides[slot] = renderPipeline->GetVertexBuffer(slot).arrayStride;
+                mStrides[slot] =
+                    checked_cast<unsigned int>(renderPipeline->GetVertexBuffer(slot).arrayStride);
                 mDirtyVertexBuffers.set(slot);
             }
         }
@@ -278,7 +280,8 @@ class ImmediateTracker : public T {
     uint32_t GetFirstIndexContentStartOffset() {
         uint32_t startIndex = offsetof(RenderImmediates, firstVertex) / kImmediateElementByteSize;
         ImmediateMask prefixBits = ImmediateMask((1u << startIndex) - 1u);
-        return (prefixBits & this->mDirty).count() * kImmediateElementByteSize;
+        return static_cast<uint32_t>((prefixBits & this->mDirty).count() *
+                                     kImmediateElementByteSize);
     }
 };
 
@@ -382,8 +385,9 @@ MaybeError CommandBuffer::Execute(const ScopedSwapStateCommandRecordingContext* 
                 DAWN_TRY(destination->TrackUsage(commandContext, pendingSerial));
 
                 // Buffer::Copy() will ensure the source and destination buffers are initialized.
-                DAWN_TRY(Buffer::Copy(commandContext, source, copy->sourceOffset, copy->size,
-                                      destination, copy->destinationOffset));
+                DAWN_TRY(Buffer::Copy(commandContext, source, copy->sourceOffset,
+                                      checked_cast<size_t>(copy->size), destination,
+                                      copy->destinationOffset));
                 break;
             }
 
@@ -418,8 +422,8 @@ MaybeError CommandBuffer::Execute(const ScopedSwapStateCommandRecordingContext* 
                                                                   Unpack(&desc), commandContext));
                     use = stagingBuffer->UseInternal();
                     DAWN_TRY(Buffer::Copy(commandContext, buffer, src.offset,
-                                          stagingBuffer->GetSize(), ToBackend(stagingBuffer.Get()),
-                                          0));
+                                          checked_cast<size_t>(stagingBuffer->GetSize()),
+                                          ToBackend(stagingBuffer.Get()), 0));
                     buffer = ToBackend(stagingBuffer.Get());
                     bufferOffset = 0;
                 }
@@ -471,7 +475,8 @@ MaybeError CommandBuffer::Execute(const ScopedSwapStateCommandRecordingContext* 
                 Texture::ReadCallback callback = [&](const uint8_t* data, uint64_t offset,
                                                      uint64_t size) -> MaybeError {
                     DAWN_TRY(ToBackend(dst.buffer)
-                                 ->Write(commandContext, dst.offset + offset, data, size));
+                                 ->Write(commandContext, dst.offset + offset, data,
+                                         checked_cast<size_t>(size)));
                     return {};
                 };
 
@@ -530,16 +535,16 @@ MaybeError CommandBuffer::Execute(const ScopedSwapStateCommandRecordingContext* 
 
             case Command::WriteBuffer: {
                 WriteBufferCmd* cmd = mCommands.NextCommand<WriteBufferCmd>();
-                uint8_t* data = mCommands.NextData<uint8_t>(cmd->size);
+                Span<const uint8_t> data = mCommands.NextData<uint8_t>(cmd->size);
 
-                if (cmd->size == 0) {
+                if (data.empty()) {
                     // Skip no-op writes.
                     continue;
                 }
 
                 Buffer* dstBuffer = ToBackend(cmd->buffer.Get());
                 DAWN_TRY(dstBuffer->TrackUsage(commandContext, pendingSerial));
-                DAWN_TRY(dstBuffer->Write(commandContext, cmd->offset, data, cmd->size));
+                DAWN_TRY(dstBuffer->Write(commandContext, cmd->offset, data.data(), data.size()));
 
                 break;
             }
@@ -605,7 +610,7 @@ MaybeError CommandBuffer::ExecuteComputePass(
                 DAWN_TRY_ASSIGN(d3dBuffer,
                                 indirectBuffer->GetD3D11NonConstantBuffer(commandContext));
                 commandContext->GetD3D11DeviceContext3()->DispatchIndirect(
-                    d3dBuffer, dispatch->indirectOffset);
+                    d3dBuffer, checked_cast<UINT>(dispatch->indirectOffset));
                 break;
             }
 
@@ -621,14 +626,12 @@ MaybeError CommandBuffer::ExecuteComputePass(
             case Command::SetBindGroup: {
                 SetBindGroupCmd* cmd = mCommands.NextCommand<SetBindGroupCmd>();
 
-                uint32_t* dynamicOffsets = nullptr;
-                if (cmd->dynamicOffsetCount > 0) {
+                ityp::span<BindingIndex, const uint32_t> dynamicOffsets;
+                if (cmd->dynamicOffsetCount > BindingIndex{0u}) {
                     dynamicOffsets = mCommands.NextData<uint32_t>(cmd->dynamicOffsetCount);
                 }
 
-                bindGroupTracker.OnSetBindGroup(cmd->index, cmd->group.Get(),
-                                                cmd->dynamicOffsetCount, dynamicOffsets);
-
+                bindGroupTracker.OnSetBindGroup(cmd->index, cmd->group.Get(), dynamicOffsets);
                 break;
             }
 
@@ -646,8 +649,9 @@ MaybeError CommandBuffer::ExecuteComputePass(
             case Command::SetImmediates: {
                 SetImmediatesCmd* cmd = mCommands.NextCommand<SetImmediatesCmd>();
                 DAWN_ASSERT(cmd->size > 0);
-                uint8_t* value = mCommands.NextData<uint8_t>(cmd->size);
-                immediates.SetImmediates(cmd->offset, value, cmd->size);
+                Span<const uint8_t> data = mCommands.NextData<uint8_t>(cmd->size);
+                // TODO(https://crbug.com/532946455): Spanify ImmediateTracker.
+                immediates.SetImmediates(cmd->offset, data.data(), data.size());
                 break;
             }
 
@@ -705,7 +709,7 @@ MaybeError CommandBuffer::ExecuteRenderPass(
                 ConvertToFloatColor(renderPass->colorAttachments[i].clearColor);
             d3d11DeviceContext->ClearRenderTargetView(d3d11RenderTargetViews[i], clearColor.data());
         }
-        attachmentCount = i + ColorAttachmentIndex{uint8_t{1}};
+        attachmentCount = i.PlusOne();
     }
 
     ID3D11DepthStencilView* d3d11DepthStencilView = nullptr;
@@ -729,9 +733,9 @@ MaybeError CommandBuffer::ExecuteRenderPass(
             clearFlags |= D3D11_CLEAR_STENCIL;
         }
 
-        d3d11DeviceContext->ClearDepthStencilView(d3d11DepthStencilView, clearFlags,
-                                                  attachmentInfo->clearDepth,
-                                                  attachmentInfo->clearStencil);
+        d3d11DeviceContext->ClearDepthStencilView(
+            d3d11DepthStencilView, clearFlags, attachmentInfo->clearDepth,
+            dchecked_cast<UINT8>(attachmentInfo->clearStencil));
     }
 
     d3d11DeviceContext->OMSetRenderTargets(static_cast<uint8_t>(attachmentCount),
@@ -747,8 +751,8 @@ MaybeError CommandBuffer::ExecuteRenderPass(
     D3D11_VIEWPORT defautViewport;
     defautViewport.TopLeftX = 0;
     defautViewport.TopLeftY = 0;
-    defautViewport.Width = renderPass->width;
-    defautViewport.Height = renderPass->height;
+    defautViewport.Width = static_cast<float>(renderPass->width);
+    defautViewport.Height = static_cast<float>(renderPass->height);
     defautViewport.MinDepth = 0.0f;
     defautViewport.MaxDepth = 1.0f;
     d3d11DeviceContext->RSSetViewports(1, &defautViewport);
@@ -757,8 +761,8 @@ MaybeError CommandBuffer::ExecuteRenderPass(
     D3D11_RECT scissor;
     scissor.left = 0;
     scissor.top = 0;
-    scissor.right = renderPass->width;
-    scissor.bottom = renderPass->height;
+    scissor.right = sign_cast(renderPass->width);
+    scissor.bottom = sign_cast(renderPass->height);
     d3d11DeviceContext->RSSetScissorRects(1, &scissor);
 
     RenderPipeline* lastPipeline = nullptr;
@@ -789,7 +793,8 @@ MaybeError CommandBuffer::ExecuteRenderPass(
 
                 DAWN_TRY(bindGroupTracker.Apply());
                 vertexBufferTracker.Apply(lastPipeline);
-                immediates.SetFirstIndexOffset(draw->baseVertex, draw->firstInstance);
+                immediates.SetFirstIndexOffset(static_cast<uint32_t>(draw->baseVertex),
+                                               draw->firstInstance);
                 DAWN_TRY(immediates.Apply(commandContext));
                 commandContext->GetD3D11DeviceContext3()->DrawIndexedInstanced(
                     draw->indexCount, draw->instanceCount, draw->firstIndex, draw->baseVertex,
@@ -827,7 +832,7 @@ MaybeError CommandBuffer::ExecuteRenderPass(
                 DAWN_TRY_ASSIGN(d3dBuffer,
                                 indirectBuffer->GetD3D11NonConstantBuffer(commandContext));
                 commandContext->GetD3D11DeviceContext3()->DrawInstancedIndirect(
-                    d3dBuffer, validatedDraw.indirectOffset);
+                    d3dBuffer, checked_cast<UINT>(validatedDraw.indirectOffset));
 
                 break;
             }
@@ -861,7 +866,7 @@ MaybeError CommandBuffer::ExecuteRenderPass(
                 DAWN_TRY_ASSIGN(d3dBuffer,
                                 indirectBuffer->GetD3D11NonConstantBuffer(commandContext));
                 commandContext->GetD3D11DeviceContext3()->DrawIndexedInstancedIndirect(
-                    d3dBuffer, validatedDraw.indirectOffset);
+                    d3dBuffer, checked_cast<UINT>(validatedDraw.indirectOffset));
 
                 break;
             }
@@ -880,20 +885,19 @@ MaybeError CommandBuffer::ExecuteRenderPass(
             case Command::SetBindGroup: {
                 SetBindGroupCmd* cmd = iter->NextCommand<SetBindGroupCmd>();
 
-                uint32_t* dynamicOffsets = nullptr;
-                if (cmd->dynamicOffsetCount > 0) {
+                ityp::span<BindingIndex, const uint32_t> dynamicOffsets;
+                if (cmd->dynamicOffsetCount > BindingIndex{0u}) {
                     dynamicOffsets = iter->NextData<uint32_t>(cmd->dynamicOffsetCount);
                 }
-                bindGroupTracker.OnSetBindGroup(cmd->index, cmd->group.Get(),
-                                                cmd->dynamicOffsetCount, dynamicOffsets);
 
+                bindGroupTracker.OnSetBindGroup(cmd->index, cmd->group.Get(), dynamicOffsets);
                 break;
             }
 
             case Command::SetIndexBuffer: {
                 SetIndexBufferCmd* cmd = iter->NextCommand<SetIndexBufferCmd>();
 
-                UINT indexBufferBaseOffset = cmd->offset;
+                UINT indexBufferBaseOffset = checked_cast<UINT>(cmd->offset);
                 DXGI_FORMAT indexBufferFormat = DXGIIndexFormat(cmd->format);
 
                 ID3D11Buffer* d3dBuffer;
@@ -924,8 +928,9 @@ MaybeError CommandBuffer::ExecuteRenderPass(
             case Command::SetImmediates: {
                 SetImmediatesCmd* cmd = iter->NextCommand<SetImmediatesCmd>();
                 DAWN_ASSERT(cmd->size > 0);
-                uint8_t* value = iter->NextData<uint8_t>(cmd->size);
-                immediates.SetImmediates(cmd->offset, value, cmd->size);
+                Span<const uint8_t> data = iter->NextData<uint8_t>(cmd->size);
+                // TODO(https://crbug.com/532946455): Spanify ImmediateTracker.
+                immediates.SetImmediates(cmd->offset, data.data(), data.size());
                 break;
             }
 
@@ -1044,8 +1049,8 @@ MaybeError CommandBuffer::ExecuteRenderPass(
             case Command::ExecuteBundles: {
                 ExecuteBundlesCmd* cmd = mCommands.NextCommand<ExecuteBundlesCmd>();
                 auto bundles = mCommands.NextData<Ref<RenderBundleBase>>(cmd->count);
-                for (uint32_t i = 0; i < cmd->count; ++i) {
-                    CommandIterator* iter = DAWN_UNSAFE_TODO(bundles[i])->GetCommands();
+                for (const auto& bundle : bundles) {
+                    CommandIterator* iter = bundle->GetCommands();
                     iter->Reset();
                     while (iter->NextCommandId(&type)) {
                         DAWN_TRY(DoRenderBundleCommand(iter, type));
@@ -1089,7 +1094,7 @@ void CommandBuffer::HandleDebugCommands(
     switch (command) {
         case Command::InsertDebugMarker: {
             InsertDebugMarkerCmd* cmd = iter->NextCommand<InsertDebugMarkerCmd>();
-            std::wstring label = UTF8ToWStr(iter->NextData<char>(cmd->length + 1));
+            std::wstring label = UTF8ToWStr(iter->NextData<char>(cmd->length + 1).data());
             commandContext->GetD3DUserDefinedAnnotation()->SetMarker(label.c_str());
             break;
         }
@@ -1102,7 +1107,7 @@ void CommandBuffer::HandleDebugCommands(
 
         case Command::PushDebugGroup: {
             PushDebugGroupCmd* cmd = iter->NextCommand<PushDebugGroupCmd>();
-            std::wstring label = UTF8ToWStr(iter->NextData<char>(cmd->length + 1));
+            std::wstring label = UTF8ToWStr(iter->NextData<char>(cmd->length + 1).data());
             commandContext->GetD3DUserDefinedAnnotation()->BeginEvent(label.c_str());
             break;
         }

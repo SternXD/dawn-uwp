@@ -28,6 +28,7 @@
 #include "src/dawn/native/Pipeline.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <set>
 #include <utility>
 
@@ -78,12 +79,12 @@ uint32_t ComputeNumTextureSamplerCombinations(const dawn::native::EntryPointMeta
     }
 
     // count the number of non-sampled that are not referenced by sampled pairs.
-    auto numNonSampled = std::count_if(nonSampled.begin(), nonSampled.end(),
-                                       [&](const WGSLBindPoint& nonSampledBindingPoint) {
-                                           return !sampledTextures.contains(nonSampledBindingPoint);
-                                       });
+    uint32_t numNonSampled = dchecked_cast<uint32_t>(std::count_if(
+        nonSampled.begin(), nonSampled.end(), [&](const WGSLBindPoint& nonSampledBindingPoint) {
+            return !sampledTextures.contains(nonSampledBindingPoint);
+        }));
     return numSamplerTexturePairs + numNonSampled + numSamplerExternalTexturePairs * 3 +
-           uint32_t(sampledExternalTextures.size());
+           static_cast<uint32_t>(sampledExternalTextures.size());
 }
 
 }  // namespace
@@ -91,8 +92,7 @@ uint32_t ComputeNumTextureSamplerCombinations(const dawn::native::EntryPointMeta
 ResultOrError<ShaderModuleEntryPoint> ValidateProgrammableStage(DeviceBase* device,
                                                                 const ShaderModuleBase* module,
                                                                 StringView entryPointName,
-                                                                size_t constantCount,
-                                                                const ConstantEntry* constants,
+                                                                Span<const ConstantEntry> constants,
                                                                 const PipelineLayoutBase* layout,
                                                                 SingleShaderStage stage) {
     DAWN_TRY(device->ValidateObject(module));
@@ -165,13 +165,13 @@ ResultOrError<ShaderModuleEntryPoint> ValidateProgrammableStage(DeviceBase* devi
     size_t numUninitializedConstants = metadata.uninitializedOverrides.size();
     // Keep an initialized constants sets to handle duplicate initialization cases
     absl::flat_hash_set<std::string_view> stageInitializedConstantIdentifiers;
-    for (uint32_t i = 0; i < constantCount; i++) {
-        absl::string_view key = {DAWN_UNSAFE_TODO(constants[i]).key};
-        double value = DAWN_UNSAFE_TODO(constants[i]).value;
+    for (auto [i, constant] : Enumerate(constants)) {
+        absl::string_view key = constant.key;
+        double value = constant.value;
 
-        DAWN_UNSAFE_TODO(DAWN_INVALID_IF(!metadata.overrides.contains(key),
-                                         "Pipeline overridable constant \"%s\" not found in %s.",
-                                         constants[i].key, module));
+        DAWN_INVALID_IF(!metadata.overrides.contains(key),
+                        "Pipeline overridable constant \"%s\" not found in %s.", constants[i].key,
+                        module);
         DAWN_INVALID_IF(!std::isfinite(value),
                         "Pipeline overridable constant \"%s\" with value (%f) is not finite in %s",
                         key, value, module);
@@ -278,9 +278,8 @@ PipelineBase::PipelineBase(DeviceBase* device,
         mStages[shaderStage] = {module, entryPointName, &metadata, {}};
 
         auto& constants = mStages[shaderStage].constants;
-        for (uint32_t i = 0; i < stage.constantCount; i++) {
-            constants.emplace(DAWN_UNSAFE_TODO(stage.constants[i]).key,
-                              DAWN_UNSAFE_TODO(stage.constants[i]).value);
+        for (const ConstantEntry& constant : stage.constants) {
+            constants.emplace(constant.key, constant.value);
         }
 
         // Compute the max() of all minBufferSizes across all stages.

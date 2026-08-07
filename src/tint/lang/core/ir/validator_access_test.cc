@@ -1470,7 +1470,10 @@ TEST_F(IR_ValidatorTest, Swizzle_OOBIndex) {
 )")) << res.Failure();
 }
 
-using IR_ValidatorAccessIndexTypeTest = IRTestParamHelper<std::tuple<bool, TypeBuilderFn>>;
+struct IR_ValidatorAccessIndexTypeTest : public IRTestParamHelper<std::tuple<bool, TypeBuilderFn>> {
+  protected:
+    void SetUp() override { mod.properties.Add(Property::kAllow16BitFloats); }
+};
 
 TEST_P(IR_ValidatorAccessIndexTypeTest, IndexType) {
     auto allowed = std::get<0>(GetParam());
@@ -1486,10 +1489,10 @@ TEST_P(IR_ValidatorAccessIndexTypeTest, IndexType) {
         b.Return(f);
     });
 
-    Capabilities caps{Capability::kAllow8BitIntegers, Capability::kAllow16BitIntegers,
-                      Capability::kAllow64BitIntegers};
-
-    auto res = ir::Validate(mod, caps);
+    mod.properties.Add(Property::kAllow8BitIntegers);
+    mod.properties.Add(Property::kAllow16BitIntegers);
+    mod.properties.Add(Property::kAllow64BitIntegers);
+    auto res = ir::Validate(mod);
     if (allowed) {
         EXPECT_EQ(res, Success) << res.Failure();
     } else {

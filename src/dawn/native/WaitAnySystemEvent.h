@@ -75,7 +75,7 @@ template <typename It>
 [[nodiscard]] bool WaitAnySystemEvent(It begin, It end, Nanoseconds timeout) {
     static_assert(std::is_same_v<typename std::iterator_traits<It>::value_type,
                                  std::pair<const SystemEventReceiver&, bool*>>);
-    size_t count = std::distance(begin, end);
+    size_t count = sign_cast(std::distance(begin, end));
     if (count == 0) {
         return false;
     }
@@ -92,7 +92,7 @@ template <typename It>
         return false;
     }
     DAWN_CHECK(WAIT_OBJECT_0 <= status && status < WAIT_OBJECT_0 + count);
-    const size_t completedIndex = status - WAIT_OBJECT_0;
+    const ptrdiff_t completedIndex = sign_cast(status - WAIT_OBJECT_0);
 
     *(*(DAWN_UNSAFE_TODO(begin + completedIndex))).second = true;
     return true;
@@ -106,7 +106,8 @@ template <typename It>
     bool retry = false;
     do {
         retry = false;
-        status = poll(pollfds.data(), pollfds.size(), ToMilliseconds(timeout));
+        status =
+            poll(pollfds.data(), checked_cast<nfds_t>(pollfds.size()), ToMilliseconds(timeout));
         if (status < 0) {
             int lErrno = errno;
             if (EAGAIN == lErrno || EINTR == lErrno) {

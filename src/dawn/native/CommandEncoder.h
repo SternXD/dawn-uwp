@@ -100,10 +100,7 @@ class CommandEncoder final : public ApiObjectBase {
                             uint32_t queryCount,
                             BufferBase* destination,
                             uint64_t destinationOffset);
-    void APIWriteBuffer(BufferBase* buffer,
-                        uint64_t bufferOffset,
-                        const uint8_t* data,
-                        uint64_t size);
+    void APIWriteBuffer(BufferBase* buffer, uint64_t bufferOffset, Span<const std::byte> data);
     void APIWriteTimestamp(QuerySetBase* querySet, uint32_t queryIndex);
 
     CommandBufferBase* APIFinish(const CommandBufferDescriptor* descriptor = nullptr);
@@ -123,7 +120,7 @@ class CommandEncoder final : public ApiObjectBase {
       private:
         // Only CommandEncoder can make this class.
         friend class CommandEncoder;
-        InternalUsageScope(CommandEncoder* encoder);
+        explicit InternalUsageScope(CommandEncoder* encoder);
 
         raw_ptr<CommandEncoder> mEncoder;
         UsageValidationMode mUsageValidationMode = UsageValidationMode::Default;

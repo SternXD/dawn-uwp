@@ -38,13 +38,15 @@
 #include "src/dawn/native/webgpu/QueueWGPU.h"
 #include "src/dawn/native/webgpu/Serialization.h"
 #include "src/utils/compiler.h"
+#include "src/utils/numeric.h"
 
 namespace dawn::native::webgpu {
 
 // static
 ResultOrError<Ref<Buffer>> Buffer::Create(Device* device,
                                           const UnpackedPtr<BufferDescriptor>& descriptor) {
-    auto actualUsage = ComputeInternalBufferUsages(device, descriptor->usage, descriptor->size);
+    auto actualUsage = ComputeInternalBufferUsages(device, descriptor->usage,
+                                                   checked_cast<size_t>(descriptor->size));
 
     // Make the inner buffer copyable for readback if possible.
     if (!(actualUsage & wgpu::BufferUsage::MapRead)) {
@@ -99,7 +101,10 @@ bool Buffer::IsCPUWritableAtCreation() const {
 }
 
 MaybeError Buffer::MapAtCreationImpl() {
-    mMappedData = ToBackend(GetDevice())->wgpu->bufferGetMappedRange(mInnerHandle, 0, GetSize());
+    // TODO(https://crbug.com/501491697): Spanify along with GetMappedPointerImpl.
+    mMappedData =
+        ToBackend(GetDevice())
+            ->wgpu->bufferGetMappedRange(mInnerHandle, 0, checked_cast<size_t>(GetSize()));
     return {};
 }
 
@@ -138,9 +143,11 @@ MaybeError Buffer::MapAsyncImpl(wgpu::MapMode mode, size_t offset, size_t size) 
     // The frontend asks that the pointer returned by GetMappedPointer is from the start of
     // the resource but WGPU gives us the pointer at offset. Remove the offset.
     if (bool{mode & wgpu::MapMode::Write}) {
+        // TODO(https://crbug.com/501491697): Spanify along with GetMappedPointerImpl.
         mMappedData = DAWN_UNSAFE_TODO(
             static_cast<uint8_t*>(wgpu.bufferGetMappedRange(mInnerHandle, offset, size)) - offset);
     } else if (bool{mode & wgpu::MapMode::Read}) {
+        // TODO(https://crbug.com/501491697): Spanify along with GetMappedPointerImpl.
         mMappedData =
             DAWN_UNSAFE_TODO(static_cast<uint8_t*>(const_cast<void*>(
                                  wgpu.bufferGetConstMappedRange(mInnerHandle, offset, size))) -
@@ -285,8 +292,8 @@ MaybeError Buffer::AddContentToCapture(CaptureContext& captureContext) {
 
         // We read this back synchronously. I'm not sure we could do much more.
         WGPUFutureWaitInfo waitInfo = {};
-        waitInfo.future =
-            wgpu.bufferMapAsync(copyBuffer, WGPUMapMode_Read, 0, copySize, innerCallbackInfo);
+        waitInfo.future = wgpu.bufferMapAsync(copyBuffer, WGPUMapMode_Read, 0,
+                                              checked_cast<size_t>(copySize), innerCallbackInfo);
         wgpu.instanceWaitAny(device->GetInnerInstance(), 1, &waitInfo, UINT64_MAX);
 
         DAWN_ASSERT(mapAsyncResult.status == WGPUMapAsyncStatus_Success);
@@ -295,8 +302,9 @@ MaybeError Buffer::AddContentToCapture(CaptureContext& captureContext) {
             return DAWN_INTERNAL_ERROR(mapAsyncResult.message);
         }
 
-        const void* data = wgpu.bufferGetConstMappedRange(copyBuffer, 0, copySize);
-        writer.WriteContentBytes(data, copySize);
+        const void* data =
+            wgpu.bufferGetConstMappedRange(copyBuffer, 0, checked_cast<size_t>(copySize));
+        writer.WriteContentBytes(data, checked_cast<size_t>(copySize));
         wgpu.bufferUnmap(copyBuffer);
     }
 

@@ -72,6 +72,7 @@
 #include "src/tint/lang/msl/writer/raise/module_scope_vars.h"
 #include "src/tint/lang/msl/writer/raise/shader_io.h"
 #include "src/tint/lang/msl/writer/raise/simd_ballot.h"
+#include "src/tint/lang/msl/writer/raise/switch_return.h"
 #include "src/tint/lang/msl/writer/raise/validate_subgroup_matrix.h"
 
 namespace tint::msl::writer {
@@ -104,27 +105,21 @@ Result<RaiseResult> Raise(core::ir::Module& module, const Options& options) {
     PopulateBindingRelatedOptions(options, remapper_data, multiplanar_map,
                                   array_length_from_constants);
 
-    // The number of vec4s used to store buffer sizes that will be set into the immediate block.
     uint32_t buffer_sizes_array_elements_num = 0;
 
     // PrepareImmediateData must come before any transform that needs internal immediates.
     core::ir::transform::PrepareImmediateDataConfig immediate_data_config;
     if (array_length_from_constants.buffer_sizes_offset) {
-        // Find the largest index declared in the map, in order to determine the number of
-        // elements needed in the array of buffer sizes. The buffer sizes will be packed into
-        // vec4s to satisfy the 16-byte alignment requirement for array elements in uniform
-        // buffers.
         uint32_t max_index = 0;
         for (auto& entry : array_length_from_constants.bindpoint_to_size_index) {
             max_index = std::max(max_index, entry.second);
         }
-        buffer_sizes_array_elements_num = (max_index / 4) + 1;
+        buffer_sizes_array_elements_num = max_index + 1;
 
         TINT_CHECK_RESULT(immediate_data_config.AddInternalImmediateData(
             array_length_from_constants.buffer_sizes_offset.value(),
             module.symbols.New("tint_storage_buffer_sizes"),
-            module.Types().array(module.Types().vec4<core::u32>(),
-                                 buffer_sizes_array_elements_num)));
+            module.Types().array(module.Types().u32(), buffer_sizes_array_elements_num)));
     }
     if (options.depth_range_offsets) {
         TINT_CHECK_RESULT(immediate_data_config.AddInternalImmediateData(
@@ -227,8 +222,7 @@ Result<RaiseResult> Raise(core::ir::Module& module, const Options& options) {
 
     TINT_CHECK_RESULT(raise::ShaderIO(
         module, raise::ShaderIOConfig{immediate_data_layout, options.emit_vertex_point_size,
-                                      options.polyfill_sample_mask, options.fixed_sample_mask,
-                                      options.depth_range_offsets}));
+                                      options.fixed_sample_mask, options.depth_range_offsets}));
 
     raise::FixTypeLayoutOptions fix_type_layout_options{
         .replace_bool_with_u32 = options.workarounds.replace_workgroup_bool_with_u32,
@@ -302,6 +296,8 @@ Result<RaiseResult> Raise(core::ir::Module& module, const Options& options) {
     raise::ModuleConstantConfig module_const_config{
         options.workarounds.disable_module_constant_f16};
     TINT_CHECK_RESULT(raise::ModuleConstant(module, module_const_config));
+
+    TINT_CHECK_RESULT(raise::SwitchReturn(module));
 
     // These transforms need to be run last as various transforms introduce terminator arguments,
     // naming conflicts, and expressions that need to be explicitly not inlined.

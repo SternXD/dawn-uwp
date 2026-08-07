@@ -34,9 +34,11 @@
 #                       Do not modify this file directly
 ################################################################################
 
+if(TINT_BUILD_HLSL_WRITER)
 ################################################################################
 # Target:    tint_lang_hlsl_writer_raise
 # Kind:      lib
+# Condition: TINT_BUILD_HLSL_WRITER
 ################################################################################
 tint_add_target(tint_lang_hlsl_writer_raise lib
   lang/hlsl/writer/raise/array_offset_from_immediate.cc
@@ -47,6 +49,8 @@ tint_add_target(tint_lang_hlsl_writer_raise lib
   lang/hlsl/writer/raise/binary_polyfill.h
   lang/hlsl/writer/raise/builtin_polyfill.cc
   lang/hlsl/writer/raise/builtin_polyfill.h
+  lang/hlsl/writer/raise/decompose_snorm10_10_10_2.cc
+  lang/hlsl/writer/raise/decompose_snorm10_10_10_2.h
   lang/hlsl/writer/raise/decompose_storage_access.cc
   lang/hlsl/writer/raise/decompose_storage_access.h
   lang/hlsl/writer/raise/extract_ternary_values.cc
@@ -69,6 +73,8 @@ tint_add_target(tint_lang_hlsl_writer_raise lib
   lang/hlsl/writer/raise/resource_table_helper.h
   lang/hlsl/writer/raise/shader_io.cc
   lang/hlsl/writer/raise/shader_io.h
+  lang/hlsl/writer/raise/split_workgroup_atomics.cc
+  lang/hlsl/writer/raise/split_workgroup_atomics.h
 )
 
 tint_target_add_dependencies(tint_lang_hlsl_writer_raise lib
@@ -101,15 +107,19 @@ tint_target_add_external_dependencies(tint_lang_hlsl_writer_raise lib
   "src_utils"
 )
 
+endif(TINT_BUILD_HLSL_WRITER)
+if(TINT_BUILD_HLSL_WRITER)
 ################################################################################
 # Target:    tint_lang_hlsl_writer_raise_test
 # Kind:      test
+# Condition: TINT_BUILD_HLSL_WRITER
 ################################################################################
 tint_add_target(tint_lang_hlsl_writer_raise_test test
   lang/hlsl/writer/raise/array_offset_from_immediate_test.cc
   lang/hlsl/writer/raise/array_offset_from_uniform_test.cc
   lang/hlsl/writer/raise/binary_polyfill_test.cc
   lang/hlsl/writer/raise/builtin_polyfill_test.cc
+  lang/hlsl/writer/raise/decompose_snorm10_10_10_2_test.cc
   lang/hlsl/writer/raise/decompose_storage_access_test.cc
   lang/hlsl/writer/raise/extract_ternary_values_test.cc
   lang/hlsl/writer/raise/localize_struct_array_assignment_test.cc
@@ -119,6 +129,7 @@ tint_add_target(tint_lang_hlsl_writer_raise_test test
   lang/hlsl/writer/raise/replace_non_indexable_mat_vec_stores_test.cc
   lang/hlsl/writer/raise/replace_subgroup_matrix_init_test.cc
   lang/hlsl/writer/raise/shader_io_test.cc
+  lang/hlsl/writer/raise/split_workgroup_atomics_test.cc
 )
 
 tint_target_add_dependencies(tint_lang_hlsl_writer_raise_test test
@@ -154,9 +165,12 @@ tint_target_add_external_dependencies(tint_lang_hlsl_writer_raise_test test
   "src_utils"
 )
 
+endif(TINT_BUILD_HLSL_WRITER)
+if(TINT_BUILD_FUZZERS AND TINT_BUILD_HLSL_WRITER)
 ################################################################################
 # Target:    tint_lang_hlsl_writer_raise_fuzz
 # Kind:      fuzz
+# Condition: TINT_BUILD_FUZZERS AND TINT_BUILD_HLSL_WRITER
 ################################################################################
 tint_add_target(tint_lang_hlsl_writer_raise_fuzz fuzz
   lang/hlsl/writer/raise/promote_initializers_fuzz.cc
@@ -187,3 +201,5 @@ tint_target_add_dependencies(tint_lang_hlsl_writer_raise_fuzz fuzz
 tint_target_add_external_dependencies(tint_lang_hlsl_writer_raise_fuzz fuzz
   "src_utils"
 )
+
+endif(TINT_BUILD_FUZZERS AND TINT_BUILD_HLSL_WRITER)

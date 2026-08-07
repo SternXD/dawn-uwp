@@ -47,6 +47,10 @@ lucicfg.config(
         "builders/gn_args_locations.json",
         "luci/commit-queue.cfg",
         "luci/cr-buildbucket.cfg",
+        "luci/luci-analysis.cfg",
+        "luci/luci-analysis-dev.cfg",
+        "luci/luci-bisection.cfg",
+        "luci/luci-bisection-dev.cfg",
         "luci/luci-logdog.cfg",
         "luci/luci-milo.cfg",
         "luci/luci-notify.cfg",
@@ -402,6 +406,11 @@ consoles.console_view(
 )
 
 consoles.list_view(
+    name = "exp",
+    title = "Dawn experimental CI Builders",
+)
+
+consoles.list_view(
     name = "try",
     title = "Dawn try Builders",
 )
@@ -417,9 +426,33 @@ exec("//recipes.star")
 exec("//tests.star")
 
 # Handle any other builders defined in other files.
+exec("//bazel_ci.star")
+exec("//bazel_try.star")
 exec("//chromium_try.star")
 exec("//cmake_ci.star")
 exec("//cmake_try.star")
 exec("//gn_standalone_ci.star")
 exec("//gn_standalone_try.star")
 exec("//trusted_robots.star")
+
+# Just copy LUCI Bisection config to generated outputs.
+lucicfg.emit(
+    dest = "luci/luci-bisection.cfg",
+    data = io.read_file("luci-bisection.cfg"),
+)
+
+lucicfg.emit(
+    dest = "luci/luci-bisection-dev.cfg",
+    data = io.read_file("luci-bisection-dev.cfg"),
+)
+
+# Just copy LUCI Analysis config to generated outputs.
+lucicfg.emit(
+    dest = "luci/luci-analysis.cfg",
+    data = io.read_file("luci-analysis.cfg"),
+)
+
+lucicfg.emit(
+    dest = "luci/luci-analysis-dev.cfg",
+    data = io.read_file("luci-analysis-dev.cfg"),
+)

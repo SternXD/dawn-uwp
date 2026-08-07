@@ -36,7 +36,6 @@
 namespace dawn::wire::server {
 
 WireResult Server::DoInstanceRequestAdapter(Known<WGPUInstance> instance,
-                                            ObjectHandle eventManager,
                                             WGPUFuture future,
                                             ObjectHandle adapterHandle,
                                             const WGPURequestAdapterOptions* options) {
@@ -44,7 +43,7 @@ WireResult Server::DoInstanceRequestAdapter(Known<WGPUInstance> instance,
     WIRE_TRY(Allocate(&adapter, adapterHandle, AllocationState::Reserved));
 
     auto userdata = MakeUserdata<RequestAdapterUserdata>();
-    userdata->eventManager = eventManager;
+    userdata->instanceId = instance.id;
     userdata->future = future;
     userdata->adapter = adapter.AsHandle();
 
@@ -60,7 +59,7 @@ void Server::OnRequestAdapterCallback(RequestAdapterUserdata* data,
                                       WGPUAdapter adapter,
                                       WGPUStringView message) {
     ReturnInstanceRequestAdapterCallbackCmd cmd = {};
-    cmd.eventManager = data->eventManager;
+    cmd.instanceId = data->instanceId;
     cmd.future = data->future;
     cmd.status = status;
     cmd.message = message;
@@ -82,8 +81,9 @@ void Server::OnRequestAdapterCallback(RequestAdapterUserdata* data,
     // Query and report the adapter supported features.
     FreeMembers<WGPUSupportedFeatures> supportedFeatures(mProcs);
     mProcs->adapterGetFeatures(adapter, &supportedFeatures);
-    cmd.featuresCount = supportedFeatures.featureCount;
-    cmd.features = supportedFeatures.features;
+    // SAFETY: WebGPU API guarantees that the returned features are valid.
+    cmd.features = DAWN_UNSAFE_BUFFERS(
+        Span<const WGPUFeatureName>(supportedFeatures.features, supportedFeatures.featureCount));
 
     // Query and report the adapter info.
     FreeMembers<WGPUAdapterInfo> info(mProcs);

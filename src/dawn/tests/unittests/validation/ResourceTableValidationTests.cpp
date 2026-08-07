@@ -138,7 +138,7 @@ class ResourceTableValidationTest : public ValidationTest {
 
     enum class Mutator : uint8_t {
         Update,
-        InsertBinding,
+        Insert,
     };
     void TestMutator(Mutator mutator, const wgpu::BindingResource* resource, bool success) {
         wgpu::ResourceTable table = MakeResourceTable(1);
@@ -155,12 +155,12 @@ class ResourceTableValidationTest : public ValidationTest {
                 break;
             }
 
-            case Mutator::InsertBinding: {
+            case Mutator::Insert: {
                 uint32_t slot = wgpu::kInvalidBinding;
                 if (success) {
-                    slot = table.InsertBinding(resource);
+                    slot = table.Insert(resource);
                 } else {
-                    ASSERT_DEVICE_ERROR(slot = table.InsertBinding(resource));
+                    ASSERT_DEVICE_ERROR(slot = table.Insert(resource));
                 }
                 EXPECT_EQ(slot, 0u);
                 break;
@@ -1447,277 +1447,6 @@ TEST_F(ResourceTableValidationTest, RenderBundleDoesNotInheritResourceTable) {
     }
 }
 
-// Test that pinning / unpinning is valid for a simple case. This is a control for the test that
-// errors are produced when the feature is not enabled.
-TEST_F(ResourceTableValidationTest, PinUnpinTextureSuccess) {
-    wgpu::TextureDescriptor desc{
-        .usage = wgpu::TextureUsage::TextureBinding,
-        .size = {1, 1},
-        .format = wgpu::TextureFormat::R32Float,
-    };
-    wgpu::Texture tex = device.CreateTexture(&desc);
-
-    tex.Pin(wgpu::TextureUsage::TextureBinding);
-    tex.Unpin();
-}
-
-// Test that calling pin/unpin is an error when the feature is not enabled.
-TEST_F(ResourceTableValidationTestDisabled, PinUnpinTextureSuccess) {
-    wgpu::TextureDescriptor desc{
-        .usage = wgpu::TextureUsage::TextureBinding,
-        .size = {1, 1},
-        .format = wgpu::TextureFormat::R32Float,
-    };
-    wgpu::Texture tex = device.CreateTexture(&desc);
-
-    ASSERT_DEVICE_ERROR(tex.Pin(wgpu::TextureUsage::TextureBinding));
-    ASSERT_DEVICE_ERROR(tex.Unpin());
-}
-
-// Test the validation of the usage parameter of Pin.
-TEST_F(ResourceTableValidationTest, PinUnpinTextureUsageConstraint) {
-    wgpu::TextureDescriptor desc{
-        .size = {1, 1},
-        .format = wgpu::TextureFormat::R32Float,
-    };
-
-    desc.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopySrc |
-                 wgpu::TextureUsage::StorageBinding;
-    wgpu::Texture testTexture = device.CreateTexture(&desc);
-
-    desc.usage = wgpu::TextureUsage::RenderAttachment;
-    wgpu::Texture renderOnlyTexture = device.CreateTexture(&desc);
-
-    // Control case, pinning the sampled texture to TextureBinding is valid.
-    testTexture.Pin(wgpu::TextureUsage::TextureBinding);
-
-    // Error case, pinning to a usage not in the texture is invalid.
-    ASSERT_DEVICE_ERROR(renderOnlyTexture.Pin(wgpu::TextureUsage::TextureBinding));
-
-    // Error case, pinning to an invalid usage is invalid.
-    ASSERT_DEVICE_ERROR(testTexture.Pin(static_cast<wgpu::TextureUsage>(0x8000'0000)));
-
-    // Error case, pinning must be to a shader usage.
-    ASSERT_DEVICE_ERROR(testTexture.Pin(wgpu::TextureUsage::CopySrc));
-
-    // Error case, pinning must be to a shader usage.
-    // TODO(https://issues.chromium.org/473459218): Lift this constraint and allow other shader
-    // usages.
-    ASSERT_DEVICE_ERROR(testTexture.Pin(wgpu::TextureUsage::StorageBinding));
-}
-
-// Test that pinning / unpinning don't need to be balanced.
-TEST_F(ResourceTableValidationTest, PinUnpinUnbalancedIsValid) {
-    wgpu::TextureDescriptor desc{
-        .usage = wgpu::TextureUsage::TextureBinding,
-        .size = {1, 1},
-        .format = wgpu::TextureFormat::R32Float,
-    };
-    wgpu::Texture tex = device.CreateTexture(&desc);
-
-    // Pinning right after creation is valid.
-    tex.Unpin();
-
-    // Pinning twice is valid.
-    tex.Pin(wgpu::TextureUsage::TextureBinding);
-    // TODO(https://issues.chromium.org/473459218): Use a different usage here when another is
-    // valid.
-    tex.Pin(wgpu::TextureUsage::TextureBinding);
-
-    // Unpinning twice (plus one more to make sure we are unbalanced) is valid.
-    tex.Unpin();
-    tex.Unpin();
-    tex.Unpin();
-}
-
-// Test that pinning is not allowed on a destroyed texture.
-TEST_F(ResourceTableValidationTest, PinDestroyedTextureInvalid) {
-    wgpu::TextureDescriptor desc{
-        .usage = wgpu::TextureUsage::TextureBinding,
-        .size = {1, 1},
-        .format = wgpu::TextureFormat::R32Float,
-    };
-    wgpu::Texture tex = device.CreateTexture(&desc);
-
-    // Success case, pinning before Destroy() is valid.
-    tex.Pin(wgpu::TextureUsage::TextureBinding);
-    tex.Unpin();
-
-    // Error case, pinning a destroyed texture is not allowed.
-    tex.Destroy();
-    ASSERT_DEVICE_ERROR(tex.Pin(wgpu::TextureUsage::TextureBinding));
-}
-
-enum class TestPinState { Default, Pinned, Unpinned };
-std::array<TestPinState, 3> kAllTestPinStates = {TestPinState::Default, TestPinState::Pinned,
-                                                 TestPinState::Unpinned};
-wgpu::Texture CreateTextureWithPinState(const wgpu::Device& device,
-                                        TestPinState pin,
-                                        wgpu::TextureUsage usage) {
-    wgpu::TextureDescriptor desc{
-        .usage = usage,
-        .size = {1, 1},
-        .format = wgpu::TextureFormat::R32Float,
-    };
-    wgpu::Texture tex = device.CreateTexture(&desc);
-
-    switch (pin) {
-        case TestPinState::Default:
-            break;
-        case TestPinState::Pinned:
-            tex.Pin(wgpu::TextureUsage::TextureBinding);
-            break;
-        case TestPinState::Unpinned:
-            tex.Pin(wgpu::TextureUsage::TextureBinding);
-            tex.Unpin();
-            break;
-    }
-
-    return tex;
-}
-
-// Test that pinning prevents usage in WriteTexture
-TEST_F(ResourceTableValidationTest, PinValidationUsageWriteTexture) {
-    for (auto pin : kAllTestPinStates) {
-        wgpu::Texture tex = CreateTextureWithPinState(
-            device, pin, wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst);
-
-        wgpu::TexelCopyTextureInfo dst = {
-            .texture = tex,
-        };
-        wgpu::TexelCopyBufferLayout dataLayout = {};
-        wgpu::Extent3D copySize = {0, 0, 0};
-
-        if (pin == TestPinState::Pinned) {
-            ASSERT_DEVICE_ERROR(
-                device.GetQueue().WriteTexture(&dst, nullptr, 0, &dataLayout, &copySize));
-        } else {
-            device.GetQueue().WriteTexture(&dst, nullptr, 0, &dataLayout, &copySize);
-        }
-    }
-}
-
-// Test that pinning prevents usage in an encoder copy command
-TEST_F(ResourceTableValidationTest, PinValidationUsageEncoderCopy) {
-    wgpu::TextureDescriptor desc{
-        .usage = wgpu::TextureUsage::CopyDst,
-        .size = {1, 1},
-        .format = wgpu::TextureFormat::R32Float,
-    };
-    wgpu::Texture texDst = device.CreateTexture(&desc);
-
-    for (auto pin : kAllTestPinStates) {
-        wgpu::Texture tex = CreateTextureWithPinState(
-            device, pin, wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopySrc);
-
-        wgpu::TexelCopyTextureInfo src = {
-            .texture = tex,
-        };
-        wgpu::TexelCopyTextureInfo dst = {
-            .texture = texDst,
-        };
-        wgpu::Extent3D copySize = {0, 0, 0};
-
-        wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
-        encoder.CopyTextureToTexture(&src, &dst, &copySize);
-        wgpu::CommandBuffer commands = encoder.Finish();
-
-        if (pin == TestPinState::Pinned) {
-            ASSERT_DEVICE_ERROR(device.GetQueue().Submit(1, &commands));
-        } else {
-            device.GetQueue().Submit(1, &commands);
-        }
-    }
-}
-
-// Test that pinning prevents usage in a dispatch if it is not the pinned usage.
-TEST_F(ResourceTableValidationTest, PinValidationUsageDispatch) {
-    wgpu::ComputePipelineDescriptor csDesc;
-    csDesc.compute.module = utils::CreateShaderModule(device, R"(
-        @group(0) @binding(0) var t_sampled : texture_2d<f32>;
-        @compute @workgroup_size(1) fn sample() {
-            _ = t_sampled;
-        }
-
-        @group(0) @binding(0) var t_ro_storage : texture_storage_2d<r32float, read>;
-        @compute @workgroup_size(1) fn ro_storage() {
-            _ = t_ro_storage;
-        }
-    )");
-
-    csDesc.compute.entryPoint = "sample";
-    wgpu::ComputePipeline samplePipeline = device.CreateComputePipeline(&csDesc);
-    csDesc.compute.entryPoint = "ro_storage";
-    wgpu::ComputePipeline storagePipeline = device.CreateComputePipeline(&csDesc);
-
-    for (auto pin : kAllTestPinStates) {
-        wgpu::Texture tex = CreateTextureWithPinState(
-            device, pin, wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::StorageBinding);
-
-        for (bool sample : {false, true}) {
-            wgpu::ComputePipeline pipeline = sample ? samplePipeline : storagePipeline;
-            wgpu::BindGroup bg = utils::MakeBindGroup(device, pipeline.GetBindGroupLayout(0),
-                                                      {
-                                                          {0, tex.CreateView()},
-                                                      });
-
-            wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
-            wgpu::ComputePassEncoder pass = encoder.BeginComputePass();
-            pass.SetPipeline(pipeline);
-            pass.SetBindGroup(0, bg);
-            pass.DispatchWorkgroups(1);
-            pass.End();
-            wgpu::CommandBuffer commands = encoder.Finish();
-
-            if (pin == TestPinState::Pinned && !sample) {
-                ASSERT_DEVICE_ERROR(device.GetQueue().Submit(1, &commands));
-            } else {
-                device.GetQueue().Submit(1, &commands);
-            }
-        }
-    }
-}
-
-// Test that pinning prevents usage in a render pass if it is not the pinned usage.
-TEST_F(ResourceTableValidationTest, PinValidationUsageRenderPass) {
-    wgpu::BindGroupLayout sampleLayout = utils::MakeBindGroupLayout(
-        device, {
-                    {0, wgpu::ShaderStage::Fragment, wgpu::TextureSampleType::UnfilterableFloat},
-                });
-    wgpu::BindGroupLayout storageLayout = utils::MakeBindGroupLayout(
-        device, {
-                    {0, wgpu::ShaderStage::Fragment, wgpu::StorageTextureAccess::ReadOnly,
-                     wgpu::TextureFormat::R32Float},
-                });
-
-    for (auto pin : kAllTestPinStates) {
-        wgpu::Texture tex = CreateTextureWithPinState(
-            device, pin, wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::StorageBinding);
-
-        for (bool sample : {false, true}) {
-            wgpu::BindGroupLayout bgl = sample ? sampleLayout : storageLayout;
-            wgpu::BindGroup bg = utils::MakeBindGroup(device, bgl,
-                                                      {
-                                                          {0, tex.CreateView()},
-                                                      });
-
-            utils::BasicRenderPass rp = utils::CreateBasicRenderPass(device, 1, 1);
-
-            wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
-            wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&rp.renderPassInfo);
-            pass.SetBindGroup(0, bg);
-            pass.End();
-            wgpu::CommandBuffer commands = encoder.Finish();
-
-            if (pin == TestPinState::Pinned && !sample) {
-                ASSERT_DEVICE_ERROR(device.GetQueue().Submit(1, &commands));
-            } else {
-                device.GetQueue().Submit(1, &commands);
-            }
-        }
-    }
-}
-
 // Checks that only texture views and samplers are allowed as resources in mutators for
 // SamplingResourceTable.
 TEST_F(ResourceTableValidationTest, MutatorBindingKindValidation) {
@@ -1739,7 +1468,7 @@ TEST_F(ResourceTableValidationTest, MutatorBindingKindValidation) {
     // Create the sampler to put in the table.
     wgpu::Sampler sampler = device.CreateSampler();
 
-    for (auto mutator : {Mutator::Update, Mutator::InsertBinding}) {
+    for (auto mutator : {Mutator::Update, Mutator::Insert}) {
         // Success case: a single texture is valid.
         {
             wgpu::BindingResource resource = {.textureView = texture.CreateView()};
@@ -1787,7 +1516,7 @@ TEST_F(ResourceTableValidationTest, MutatorResourceMustBeValid) {
     sDesc.lodMinClamp = -1;
     ASSERT_DEVICE_ERROR(wgpu::Sampler samplerBad = device.CreateSampler(&sDesc));
 
-    for (auto mutator : {Mutator::Update, Mutator::InsertBinding}) {
+    for (auto mutator : {Mutator::Update, Mutator::Insert}) {
         // Success case: valid texture
         {
             wgpu::BindingResource resource = {.textureView = textureGood.CreateView()};
@@ -1831,13 +1560,13 @@ TEST_F(ResourceTableValidationTest, MutatorsMultipleResources) {
 
     EXPECT_EQ(wgpu::Status::Success, table.Update(0, &textureResource));
     EXPECT_EQ(wgpu::Status::Success, table.Update(1, &samplerResource));
-    EXPECT_EQ(2u, table.InsertBinding(&textureResource));
-    EXPECT_EQ(3u, table.InsertBinding(&samplerResource));
+    EXPECT_EQ(2u, table.Insert(&textureResource));
+    EXPECT_EQ(3u, table.Insert(&samplerResource));
 
-    EXPECT_EQ(wgpu::Status::Success, table.RemoveBinding(0));
-    EXPECT_EQ(wgpu::Status::Success, table.RemoveBinding(1));
-    EXPECT_EQ(wgpu::Status::Success, table.RemoveBinding(2));
-    EXPECT_EQ(wgpu::Status::Success, table.RemoveBinding(3));
+    EXPECT_EQ(wgpu::Status::Success, table.Remove(0));
+    EXPECT_EQ(wgpu::Status::Success, table.Remove(1));
+    EXPECT_EQ(wgpu::Status::Success, table.Remove(2));
+    EXPECT_EQ(wgpu::Status::Success, table.Remove(3));
 }
 
 // Check that the view must have only the TextureBinding usage for SamplingResourceTable.
@@ -1853,7 +1582,7 @@ TEST_F(ResourceTableValidationTest, MutatorTextureViewMustBeOnlyTextureBinding) 
     };
     wgpu::Texture tex = device.CreateTexture(&tDesc);
 
-    for (auto mutator : {Mutator::Update, Mutator::InsertBinding}) {
+    for (auto mutator : {Mutator::Update, Mutator::Insert}) {
         // Control case: limiting the usage to TextureBinding is valid.
         {
             wgpu::TextureViewDescriptor vDesc{
@@ -1902,7 +1631,7 @@ TEST_F(ResourceTableValidationTest, MutatorTextureViewMustBeSingleAspect) {
     };
     wgpu::Texture tex = device.CreateTexture(&tDesc);
 
-    for (auto mutator : {Mutator::Update, Mutator::InsertBinding}) {
+    for (auto mutator : {Mutator::Update, Mutator::Insert}) {
         // Success case, only the depth aspect is selected.
         {
             wgpu::TextureViewDescriptor vDesc{
@@ -1950,7 +1679,7 @@ TEST_F(ResourceTableStaticSamplerValidationTest, MutatorSamplerMustNotBeYCbCr) {
     samplerDesc.nextInChain = &yCbCrDesc;
     wgpu::Sampler samplerYCbCr = device.CreateSampler(&samplerDesc);
 
-    for (auto mutator : {Mutator::Update, Mutator::InsertBinding}) {
+    for (auto mutator : {Mutator::Update, Mutator::Insert}) {
         // Success case: default sampler
         {
             wgpu::BindingResource resource = {.sampler = samplerDefault};
@@ -1987,7 +1716,7 @@ TEST_F(ResourceTableStaticSamplerValidationTest, MutatorViewMustNotBeYCbCr) {
         .usage = wgpu::TextureUsage::TextureBinding,
     };
 
-    for (auto mutator : {Mutator::Update, Mutator::InsertBinding}) {
+    for (auto mutator : {Mutator::Update, Mutator::Insert}) {
         // Success case: default texture view
         {
             wgpu::BindingResource resource = {.textureView = textureDefault.CreateView()};
@@ -2002,7 +1731,7 @@ TEST_F(ResourceTableStaticSamplerValidationTest, MutatorViewMustNotBeYCbCr) {
     }
 }
 
-// Test that it is not allowed to call Update, RemoveBinding or InsertBinding after the table is
+// Test that it is not allowed to call Update, Remove or Insert after the table is
 // destroyed.
 TEST_F(ResourceTableValidationTest, MutatorsAfterDestroy) {
     // Create the texture to put in the table.
@@ -2018,24 +1747,24 @@ TEST_F(ResourceTableValidationTest, MutatorsAfterDestroy) {
     for (auto table : {MakeResourceTable(7), MakeErrorResourceTable(7)}) {
         utils::ScopedIgnoreValidationErrors ignoreErrors(device);
 
-        // Add a few bindings just to test RemoveBinding
+        // Add a few bindings just to test Remove
         EXPECT_EQ(wgpu::Status::Success, table.Update(0, &resource));
         EXPECT_EQ(wgpu::Status::Success, table.Update(1, &resource));
 
         // Success cases, calling mutators before destroying is valid.
         EXPECT_EQ(wgpu::Status::Success, table.Update(2, &resource));
-        EXPECT_NE(wgpu::kInvalidBinding, table.InsertBinding(&resource));
-        EXPECT_EQ(wgpu::Status::Success, table.RemoveBinding(0));
+        EXPECT_NE(wgpu::kInvalidBinding, table.Insert(&resource));
+        EXPECT_EQ(wgpu::Status::Success, table.Remove(0));
 
         // Error case, after destruction all mutators return errors.
         table.Destroy();
         EXPECT_EQ(wgpu::Status::Error, table.Update(6, &resource));
-        EXPECT_EQ(wgpu::kInvalidBinding, table.InsertBinding(&resource));
-        EXPECT_EQ(wgpu::Status::Error, table.RemoveBinding(1));
+        EXPECT_EQ(wgpu::kInvalidBinding, table.Insert(&resource));
+        EXPECT_EQ(wgpu::Status::Error, table.Remove(1));
     }
 }
 
-// Test that it is not allowed to call Update, RemoveBinding with slots past the end.
+// Test that it is not allowed to call Update, Remove with slots past the end.
 TEST_F(ResourceTableValidationTest, MutatorsAfterTableEnd) {
     // Create the texture to put in the table.
     wgpu::TextureDescriptor tDesc{
@@ -2053,16 +1782,16 @@ TEST_F(ResourceTableValidationTest, MutatorsAfterTableEnd) {
         // Success cases, calling mutators with slots in bounds.
         EXPECT_EQ(wgpu::Status::Success, table.Update(0, &resource));
         EXPECT_EQ(wgpu::Status::Success, table.Update(41, &resource));
-        EXPECT_EQ(wgpu::Status::Success, table.RemoveBinding(0));
-        EXPECT_EQ(wgpu::Status::Success, table.RemoveBinding(41));
+        EXPECT_EQ(wgpu::Status::Success, table.Remove(0));
+        EXPECT_EQ(wgpu::Status::Success, table.Remove(41));
 
         // Error case, calling mutators with out of bounds slots.
         EXPECT_EQ(wgpu::Status::Error, table.Update(42, &resource));
-        EXPECT_EQ(wgpu::Status::Error, table.RemoveBinding(42));
+        EXPECT_EQ(wgpu::Status::Error, table.Remove(42));
     }
 }
 
-// Test that Update/RemoveBinding return success but generates a validation error when used on an
+// Test that Update/Remove return success but generates a validation error when used on an
 // invalid table.
 TEST_F(ResourceTableValidationTest, MutatorsOnInvalidTable) {
     // Create the texture to put in the table.
@@ -2078,8 +1807,8 @@ TEST_F(ResourceTableValidationTest, MutatorsOnInvalidTable) {
         wgpu::ResourceTable table = MakeResourceTable(3);
 
         EXPECT_EQ(wgpu::Status::Success, table.Update(0, &resource));
-        EXPECT_EQ(wgpu::Status::Success, table.RemoveBinding(0));
-        EXPECT_NE(wgpu::kInvalidBinding, table.InsertBinding(&resource));
+        EXPECT_EQ(wgpu::Status::Success, table.Remove(0));
+        EXPECT_NE(wgpu::kInvalidBinding, table.Insert(&resource));
     }
 
     // Test on an invalid table.
@@ -2087,8 +1816,8 @@ TEST_F(ResourceTableValidationTest, MutatorsOnInvalidTable) {
         wgpu::ResourceTable table = MakeErrorResourceTable(3);
 
         ASSERT_DEVICE_ERROR(EXPECT_EQ(wgpu::Status::Success, table.Update(0, &resource)));
-        ASSERT_DEVICE_ERROR(EXPECT_EQ(wgpu::Status::Success, table.RemoveBinding(0)));
-        ASSERT_DEVICE_ERROR(EXPECT_NE(wgpu::kInvalidBinding, table.InsertBinding(&resource)));
+        ASSERT_DEVICE_ERROR(EXPECT_EQ(wgpu::Status::Success, table.Remove(0)));
+        ASSERT_DEVICE_ERROR(EXPECT_NE(wgpu::kInvalidBinding, table.Insert(&resource)));
     }
 }
 
@@ -2117,16 +1846,16 @@ TEST_F(ResourceTableValidationTest, UpdateBindingWhenNeverUsed) {
 }
 
 // Test that Remove() can be called on a table slot even when it was never used.
-TEST_F(ResourceTableValidationTest, RemoveBindingWhenNeverUsed) {
+TEST_F(ResourceTableValidationTest, RemoveWhenNeverUsed) {
     // This is "content timeline" validation so it works the same on error tables and valid tables,
     // and we ignore device-timeline validation errors, they are not what we are testing here.
     for (auto table : {MakeResourceTable(3), MakeErrorResourceTable(3)}) {
         utils::ScopedIgnoreValidationErrors ignoreErrors(device);
-        EXPECT_EQ(wgpu::Status::Success, table.RemoveBinding(0));
+        EXPECT_EQ(wgpu::Status::Success, table.Remove(0));
     }
 }
 
-// Check that a table slot can be updated only after all commands submitted prior to RemoveBinding
+// Check that a table slot can be updated only after all commands submitted prior to Remove
 // are completed.
 TEST_F(ResourceTableValidationTest, UpdateAfterRemoveRequiresGPUIsFinished) {
     wgpu::TextureDescriptor tDesc{
@@ -2150,7 +1879,7 @@ TEST_F(ResourceTableValidationTest, UpdateAfterRemoveRequiresGPUIsFinished) {
         device.GetQueue().OnSubmittedWorkDone(
             wgpu::CallbackMode::AllowSpontaneous,
             [&](wgpu::QueueWorkDoneStatus, wgpu::StringView) { updateValid = true; });
-        EXPECT_EQ(wgpu::Status::Success, table.RemoveBinding(0));
+        EXPECT_EQ(wgpu::Status::Success, table.Remove(0));
 
         // The null backend happens to call OnSubmittedWorkDone immediately because commands take 0
         // time. This test is duplicated in the end2end tests where OnSubmittedWorkDone won't fire
@@ -2173,7 +1902,7 @@ TEST_F(ResourceTableValidationTest, UpdateAfterRemoveRequiresGPUIsFinished) {
 }
 
 // Check that trying to insert bindings fail when no more are available.
-TEST_F(ResourceTableValidationTest, InsertBindingFailWhenNoMoreSpace) {
+TEST_F(ResourceTableValidationTest, InsertFailWhenNoMoreSpace) {
     wgpu::TextureDescriptor tDesc{
         .usage = wgpu::TextureUsage::TextureBinding,
         .size = {1, 1},
@@ -2187,24 +1916,24 @@ TEST_F(ResourceTableValidationTest, InsertBindingFailWhenNoMoreSpace) {
         utils::ScopedIgnoreValidationErrors ignoreErrors(device);
 
         // There is space for only three resources.
-        EXPECT_EQ(0u, table.InsertBinding(&resource));
-        EXPECT_EQ(1u, table.InsertBinding(&resource));
-        EXPECT_EQ(2u, table.InsertBinding(&resource));
-        EXPECT_EQ(wgpu::kInvalidBinding, table.InsertBinding(&resource));
+        EXPECT_EQ(0u, table.Insert(&resource));
+        EXPECT_EQ(1u, table.Insert(&resource));
+        EXPECT_EQ(2u, table.Insert(&resource));
+        EXPECT_EQ(wgpu::kInvalidBinding, table.Insert(&resource));
 
         // Remove one binding (and wait for it to be recycled), it will be available for
-        // InsertBinding after which a new InsertBinding will still run out of space.
-        EXPECT_EQ(wgpu::Status::Success, table.RemoveBinding(1));
+        // Insert after which a new InsertBinding will still run out of space.
+        EXPECT_EQ(wgpu::Status::Success, table.Remove(1));
         UseResourceTableInSubmit(table);
         WaitForAllOperations();
 
-        EXPECT_EQ(1u, table.InsertBinding(&resource));
-        EXPECT_EQ(wgpu::kInvalidBinding, table.InsertBinding(&resource));
+        EXPECT_EQ(1u, table.Insert(&resource));
+        EXPECT_EQ(wgpu::kInvalidBinding, table.Insert(&resource));
     }
 }
 
-// Check that bindings that are inserted are unavailable for Update() until RemoveBinding.
-TEST_F(ResourceTableValidationTest, InsertBindingPreventsUpdate) {
+// Check that bindings that are inserted are unavailable for Update() until Remove.
+TEST_F(ResourceTableValidationTest, InsertPreventsUpdate) {
     wgpu::TextureDescriptor tDesc{
         .usage = wgpu::TextureUsage::TextureBinding,
         .size = {1, 1},
@@ -2217,11 +1946,11 @@ TEST_F(ResourceTableValidationTest, InsertBindingPreventsUpdate) {
     for (auto table : {MakeResourceTable(1), MakeErrorResourceTable(1)}) {
         utils::ScopedIgnoreValidationErrors ignoreErrors(device);
 
-        EXPECT_EQ(0u, table.InsertBinding(&resource));
+        EXPECT_EQ(0u, table.Insert(&resource));
         EXPECT_EQ(wgpu::Status::Error, table.Update(0, &resource));
 
         // Remove one binding (and wait for it to be recycled), it will be available for Update.
-        EXPECT_EQ(wgpu::Status::Success, table.RemoveBinding(0));
+        EXPECT_EQ(wgpu::Status::Success, table.Remove(0));
         UseResourceTableInSubmit(table);
         WaitForAllOperations();
 
@@ -2229,8 +1958,8 @@ TEST_F(ResourceTableValidationTest, InsertBindingPreventsUpdate) {
     }
 }
 
-// Check that InsertBinding skips over used slots.
-TEST_F(ResourceTableValidationTest, InsertBindingSkipsOverUsedSlots) {
+// Check that Insert skips over used slots.
+TEST_F(ResourceTableValidationTest, InsertSkipsOverUsedSlots) {
     wgpu::TextureDescriptor tDesc{
         .usage = wgpu::TextureUsage::TextureBinding,
         .size = {1, 1},
@@ -2245,22 +1974,22 @@ TEST_F(ResourceTableValidationTest, InsertBindingSkipsOverUsedSlots) {
         EXPECT_EQ(wgpu::Status::Success, table.Update(1, &resource));
         EXPECT_EQ(wgpu::Status::Success, table.Update(3, &resource));
 
-        // InsertBinding skips over entries used by Update()
-        EXPECT_EQ(0u, table.InsertBinding(&resource));
-        EXPECT_EQ(2u, table.InsertBinding(&resource));
-        EXPECT_EQ(4u, table.InsertBinding(&resource));
+        // Insert skips over entries used by Update()
+        EXPECT_EQ(0u, table.Insert(&resource));
+        EXPECT_EQ(2u, table.Insert(&resource));
+        EXPECT_EQ(4u, table.Insert(&resource));
 
         // Remove bindings in inverse order.
         for (uint32_t i : {4, 3, 2}) {
-            EXPECT_EQ(wgpu::Status::Success, table.RemoveBinding(i));
+            EXPECT_EQ(wgpu::Status::Success, table.Remove(i));
         }
         UseResourceTableInSubmit(table);
         WaitForAllOperations();
 
-        // InsertBinding should still return the min available slot.
-        EXPECT_EQ(2u, table.InsertBinding(&resource));
-        EXPECT_EQ(3u, table.InsertBinding(&resource));
-        EXPECT_EQ(4u, table.InsertBinding(&resource));
+        // Insert should still return the min available slot.
+        EXPECT_EQ(2u, table.Insert(&resource));
+        EXPECT_EQ(3u, table.Insert(&resource));
+        EXPECT_EQ(4u, table.Insert(&resource));
     }
 }
 

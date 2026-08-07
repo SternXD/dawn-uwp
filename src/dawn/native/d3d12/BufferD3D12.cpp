@@ -163,7 +163,10 @@ ResultOrError<Ref<Buffer>> Buffer::CreateFromSharedBufferMemory(
 
 MaybeError Buffer::InitializeAsExternalBuffer(ComPtr<ID3D12Resource> d3d12Buffer,
                                               const UnpackedPtr<BufferDescriptor>& descriptor) {
-    mAllocatedSize = descriptor->size;
+    // `mAllocatedSize` should always be the size of the underlying D3D12 buffer resource. Note that
+    // for a buffer backed by shared memory, its wgpu buffer size may be smaller than the width of
+    // the underlying D3D12 buffer resource.
+    mAllocatedSize = d3d12Buffer->GetDesc().Width;
     AllocationInfo info;
     info.mMethod = AllocationMethod::kExternal;
     info.mRequestedSize = mAllocatedSize.value();
@@ -291,12 +294,13 @@ MaybeError Buffer::InitializeHostMapped(const BufferHostMappedPointer* hostMappe
 
     D3D12_RESOURCE_ALLOCATION_INFO resourceInfo =
         device->GetD3D12Device()->GetResourceAllocationInfo(0, 1, &resourceDescriptor);
-    DAWN_INVALID_IF(resourceInfo.SizeInBytes > heapSize,
-                    "Resource required %u bytes, but heap is %u bytes.", resourceInfo.SizeInBytes,
-                    heapSize);
-    DAWN_INVALID_IF(!IsPtrAligned(hostMappedDesc->pointer, resourceInfo.Alignment),
-                    "Host-mapped pointer (%p) did not satisfy required alignment (%u).",
-                    hostMappedDesc->pointer, resourceInfo.Alignment);
+    DAWN_INVALID_IF(
+        resourceInfo.SizeInBytes > heapSize, "Resource required %u bytes, but heap is %u bytes.",
+        checked_cast<uint32_t>(resourceInfo.SizeInBytes), checked_cast<uint32_t>(heapSize));
+    DAWN_INVALID_IF(
+        !IsPtrAligned(hostMappedDesc->pointer, checked_cast<size_t>(resourceInfo.Alignment)),
+        "Host-mapped pointer (%p) did not satisfy required alignment (%u).",
+        hostMappedDesc->pointer, resourceInfo.Alignment);
 
     mAllocatedSize = resourceInfo.SizeInBytes;
     mLastState = D3D12_RESOURCE_STATE_COMMON;
@@ -452,7 +456,17 @@ bool Buffer::IsCPUWritableAtCreation() const {
     // staging buffer, and copied from the staging buffer to the GPU memory of the current
     // buffer in the unmap() call.
     // TODO(enga): Handle CPU-visible memory on UMA
-    return (GetInternalUsage() & wgpu::BufferUsage::MapWrite) != 0;
+    if ((GetInternalUsage() & wgpu::BufferUsage::MapWrite) != 0) {
+        return true;
+    }
+    // For shared buffer memory buffers, the underlying memory may be CPU writable even if the
+    // buffer's usage doesn't include MapWrite. Check the shared memory's properties.
+    if (auto* contents = GetSharedResourceMemoryContents()) {
+        if (auto sharedMemory = contents->GetSharedResourceMemory().Promote()) {
+            return static_cast<SharedBufferMemoryBase*>(sharedMemory.Get())->CanBeWrittenByCPU();
+        }
+    }
+    return false;
 }
 
 MaybeError Buffer::MapInternal(bool isWrite, size_t offset, size_t size, const char* contextInfo) {
@@ -471,7 +485,7 @@ MaybeError Buffer::MapInternal(bool isWrite, size_t offset, size_t size, const c
     // mMappedData is the pointer to the start of the resource, irrespective of offset.
     // MSDN says (note the weird use of "never"):
     //
-    //   When ppData is not NULL, the pointer returned is never offset by any values in
+    //   When ppData is not nullptr, the pointer returned is never offset by any values in
     //   pReadRange.
     //
     // https://docs.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12resource-map
@@ -490,7 +504,7 @@ MaybeError Buffer::MapAtCreationImpl() {
     // We will use a staging buffer for MapRead buffers instead so we just clear the staging
     // buffer and initialize the original buffer by copying the staging buffer to the original
     // buffer one the first time Unmap() is called.
-    DAWN_ASSERT((GetInternalUsage() & wgpu::BufferUsage::MapWrite) != 0);
+    DAWN_ASSERT(IsCPUWritableAtCreation());
 
     // The buffers with mappedAtCreation == true will be initialized in
     // BufferBase::MapAtCreation().
@@ -511,6 +525,7 @@ MaybeError Buffer::MapAsyncImpl(wgpu::MapMode mode, size_t offset, size_t size) 
         DAWN_TRY(EnsureDataInitialized(commandContext));
     }
 
+    // The buffer has been initialized from the GPU if needed, now we can map it.
     return MapInternal(mode & wgpu::MapMode::Write, offset, size, "D3D12 map async");
 }
 
@@ -651,9 +666,9 @@ MaybeError Buffer::SynchronizeBufferBeforeMapping() {
         for (const auto& fence : fences) {
             ComPtr<ID3D12Fence> d3dFence = ToBackend(fence.object)->GetD3DFence();
             if (d3dFence->GetCompletedValue() < fence.signaledValue) {
-                // If hEvent is NULL, SetEventOnCompletion will return when fence reaches
+                // If hEvent is nullptr, SetEventOnCompletion will return when fence reaches
                 // fence.signaledValue.
-                d3dFence->SetEventOnCompletion(fence.signaledValue, NULL);
+                d3dFence->SetEventOnCompletion(fence.signaledValue, nullptr);
             }
         }
     }
@@ -719,17 +734,20 @@ MaybeError Buffer::ClearBuffer(CommandRecordingContext* commandContext,
     if (GetInternalUsage() & wgpu::BufferUsage::MapWrite) {
         DAWN_TRY(MapInternal(true, static_cast<size_t>(offset), static_cast<size_t>(size),
                              "D3D12 map at clear buffer"));
-        DAWN_UNSAFE_TODO(memset(mMappedData, clearValue, size));
+        // TODO(https://crbug.com/501491697): Spanify GetMappedPointerImpl.
+        DAWN_UNSAFE_TODO(memset(mMappedData, clearValue, checked_cast<size_t>(size)));
         UnmapImpl(GetState(), BufferState::Unmapped);
     } else if (clearValue == 0u) {
         DAWN_TRY(device->ClearBufferToZero(commandContext, this, offset, size));
     } else {
         // TODO(crbug.com/dawn/852): use ClearUnorderedAccessView*() when the buffer usage
         // includes STORAGE.
+        // TODO(https://crbug.com/534203108): Spanify WithUploadReservation.
         DAWN_TRY(device->GetDynamicUploader()->WithUploadReservation(
             size, kCopyBufferToBufferOffsetAlignment,
             [&](UploadReservation reservation) -> MaybeError {
-                DAWN_UNSAFE_TODO(memset(reservation.mappedPointer, clearValue, size));
+                DAWN_UNSAFE_TODO(
+                    memset(reservation.mappedPointer, clearValue, checked_cast<size_t>(size)));
                 device->CopyFromStagingToBufferHelper(commandContext, reservation.buffer.Get(),
                                                       reservation.offsetInBuffer, this, offset,
                                                       size);

@@ -25,6 +25,7 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+#include <array>
 #include <bit>
 #include <limits>
 #include <memory>
@@ -42,16 +43,16 @@
 #include "src/dawn/utils/WGPUHelpers.h"
 #include "src/utils/compiler.h"
 
-#if TINT_BUILD_SPV_READER && !defined(__EMSCRIPTEN__)
+#if TINT_BUILD_SPV_READER && !DAWN_PLATFORM_IS(EMSCRIPTEN)
 #include "spirv-tools/optimizer.hpp"
-#endif  // TINT_BUILD_SPV_READER && !defined(__EMSCRIPTEN__)
+#endif  // TINT_BUILD_SPV_READER && !DAWN_PLATFORM_IS(EMSCRIPTEN)
 
 namespace dawn {
 namespace {
 
 class ShaderModuleValidationTest : public ValidationTest {};
 
-#if TINT_BUILD_SPV_READER && !defined(__EMSCRIPTEN__)
+#if TINT_BUILD_SPV_READER && !DAWN_PLATFORM_IS(EMSCRIPTEN)
 
 wgpu::ShaderModule CreateShaderModuleFromASM(
     const wgpu::Device& device,
@@ -298,7 +299,7 @@ TEST_F(ShaderModuleValidationTest, NonUniformDerivatives_FlagSetToTrue) {
     CreateShaderModuleFromASM(device, kShaderWithNonUniformDerivative, &spirv_options_desc);
 }
 
-#endif  // TINT_BUILD_SPV_READER && !defined(__EMSCRIPTEN__)
+#endif  // TINT_BUILD_SPV_READER && !DAWN_PLATFORM_IS(EMSCRIPTEN)
 
 // Test that it is invalid to create a shader module with no chained descriptor. (It must be
 // WGSL or SPIRV, not empty)
@@ -909,14 +910,14 @@ TEST_F(ShaderModuleMaxInterStageShaderVariablesValidationTest, Test) {
             const char* extension;
             std::optional<wgpu::FeatureName> requiredFeature;
         };
-        Builtin builtins[] = {
+        auto builtins = std::array<Builtin, 6>({
             {"front_facing", "bool", nullptr, {}},
             {"sample_index", "u32", nullptr, {}},
             {"sample_mask", "u32", nullptr, {}},
             {"primitive_index", "u32", "primitive_index", wgpu::FeatureName::PrimitiveIndex},
             {"subgroup_invocation_id", "u32", "subgroups", wgpu::FeatureName::Subgroups},
             {"subgroup_size", "u32", "subgroups", wgpu::FeatureName::Subgroups},
-        };
+        });
         for (uint8_t mask = 1; mask < 1 << std::size(builtins); ++mask) {
             std::string builtInDeclarations = "";
             bool canTest = true;
@@ -977,7 +978,7 @@ const WGSLExtensionInfo kExtensions[] = {
     {"chromium_experimental_framebuffer_fetch", true, {wgpu::FeatureName::FramebufferFetch}, {}},
     {"chromium_experimental_subgroup_matrix", true, {wgpu::FeatureName::ChromiumExperimentalSubgroupMatrix}, {}},
     {"chromium_experimental_resource_table", true, {wgpu::FeatureName::ChromiumExperimentalSamplingResourceTable}, {}},
-    {"subgroup_size_control", true, {wgpu::FeatureName::SubgroupSizeControl}, {"subgroups"}},
+    {"subgroup_size_control", false, {wgpu::FeatureName::SubgroupSizeControl}, {"subgroups"}},
     {"atomic_vec2u_min_max", true, {wgpu::FeatureName::AtomicVec2uMinMax}, {}}
 
     // Currently the following WGSL extensions are not enabled under any situation.
@@ -1219,7 +1220,46 @@ TEST_F(SubgroupSizeControlValidationTest, ValidateTotalInvocationsPerWorkgroupAn
     TestTotalInvocationsPerWorkgroupAndSubgroupSize({32}, 32, true);
 }
 
+// Test that @subgroup_size(0) produces a validation error.
+TEST_F(SubgroupSizeControlValidationTest, ZeroSubgroupSizeIsInvalid) {
+    // Test with subgroup_size set as an override constant to 0.
+    {
+        std::string shader = R"(
+enable subgroups;
+enable subgroup_size_control;
+override kSubgroupSize : u32;
+@compute @subgroup_size(kSubgroupSize) @workgroup_size(32)
+fn main(@builtin(subgroup_invocation_id) sg_id : u32,
+        @builtin(subgroup_size) sg_size : u32) {
+    _ = sg_id + sg_size;
+})";
 
+        wgpu::ComputePipelineDescriptor pipelineDesc = {};
+        pipelineDesc.compute.module = utils::CreateShaderModule(device, shader.c_str());
+
+        wgpu::ConstantEntry entry = {};
+        entry.key = "kSubgroupSize";
+        entry.value = 0.0;
+        pipelineDesc.compute.constantCount = 1;
+        pipelineDesc.compute.constants = &entry;
+
+        ASSERT_DEVICE_ERROR(device.CreateComputePipeline(&pipelineDesc));
+    }
+
+    // Test with subgroup_size set as a module-scope constant to 0.
+    {
+        std::string shader = R"(
+enable subgroups;
+enable subgroup_size_control;
+const kSubgroupSize = 0u;
+@compute @subgroup_size(kSubgroupSize) @workgroup_size(32)
+fn main(@builtin(subgroup_invocation_id) sg_id : u32,
+        @builtin(subgroup_size) sg_size : u32) {
+    _ = sg_id + sg_size;
+})";
+        ASSERT_DEVICE_ERROR(utils::CreateShaderModule(device, shader.c_str()));
+    }
+}
 
 }  // anonymous namespace
 }  // namespace dawn

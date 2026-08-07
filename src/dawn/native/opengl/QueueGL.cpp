@@ -43,6 +43,7 @@
 #include "src/dawn/native/opengl/UtilsGL.h"
 #include "src/dawn/platform/tracing/TraceEvent.h"
 #include "src/utils/compiler.h"
+#include "src/utils/numeric.h"
 
 namespace dawn::native::opengl {
 
@@ -77,38 +78,37 @@ Queue::Queue(Device* device, const QueueDescriptor* descriptor) : QueueBase(devi
     }
 }
 
-MaybeError Queue::SubmitImpl(uint32_t commandCount, CommandBufferBase* const* commands) {
+MaybeError Queue::SubmitImpl(Span<CommandBufferBase* const> commands) {
     Device* device = ToBackend(GetDevice());
-    return device->EnqueueAndFlushGL(
-        [this, commandCount, commands](const OpenGLFunctions& gl) -> MaybeError {
-            TRACE_EVENT_BEGIN0(GetDevice()->GetPlatform(), Recording, "CommandBufferGL::Execute");
-            for (uint32_t i = 0; i < commandCount; ++i) {
-                DAWN_UNSAFE_TODO(DAWN_TRY(ToBackend(commands[i])->Execute(gl)));
-            }
-            TRACE_EVENT_END0(GetDevice()->GetPlatform(), Recording, "CommandBufferGL::Execute");
-            return {};
-        });
+    return device->EnqueueAndFlushGL([this, commands](const OpenGLFunctions& gl) -> MaybeError {
+        TRACE_EVENT_BEGIN0(GetDevice()->GetPlatform(), Recording, "CommandBufferGL::Execute");
+        for (CommandBufferBase* commandBuffer : commands) {
+            DAWN_TRY(ToBackend(commandBuffer)->Execute(gl));
+        }
+        TRACE_EVENT_END0(GetDevice()->GetPlatform(), Recording, "CommandBufferGL::Execute");
+        return {};
+    });
 }
 
 MaybeError Queue::WriteBufferImpl(BufferBase* buffer,
                                   uint64_t bufferOffset,
-                                  const void* data,
-                                  size_t size) {
-    DAWN_TRY(ToBackend(buffer)->EnsureDataInitializedAsDestination(bufferOffset, size));
+                                  Span<const std::byte> data) {
+    DAWN_TRY(ToBackend(buffer)->EnsureDataInitializedAsDestination(bufferOffset, data.size()));
     buffer->MarkUsedInPendingCommands();
     return ToBackend(GetDevice())
-        ->EnqueueGL(data, size,
+        ->EnqueueGL(data,
                     [buffer = Ref<Buffer>(ToBackend(buffer)), bufferOffset](
-                        const OpenGLFunctions& gl, const void* data, size_t size) -> MaybeError {
+                        const OpenGLFunctions& gl, Span<const std::byte> data) -> MaybeError {
                         DAWN_GL_TRY(gl, BindBuffer(GL_ARRAY_BUFFER, buffer->GetHandle()));
-                        DAWN_GL_TRY(gl, BufferSubData(GL_ARRAY_BUFFER, bufferOffset, size, data));
+                        DAWN_GL_TRY(
+                            gl, BufferSubData(GL_ARRAY_BUFFER, checked_cast<GLintptr>(bufferOffset),
+                                              checked_cast<GLsizeiptr>(data.size()), data.data()));
                         return {};
                     });
 }
 
 MaybeError Queue::WriteTextureImpl(const TexelCopyTextureInfo& destination,
-                                   const void* data,
-                                   size_t dataSize,
+                                   Span<const std::byte> data,
                                    const TexelCopyBufferLayout& dataLayout,
                                    const Extent3D& writeSizePixel) {
     TextureCopy textureCopy;
@@ -141,11 +141,11 @@ MaybeError Queue::WriteTextureImpl(const TexelCopyTextureInfo& destination,
             // So the x,y,z origins and mipLevel are always 0.
             destinationDataTexture.mipLevel = 0;
             destinationDataTexture.origin = {0, 0, 0};
-            DAWN_TRY_CONTEXT(WriteTextureImpl(destinationDataTexture, data, dataSize, dataLayout,
-                                              writeSizePixel),
-                             "writing to stencil aspect of %s using blit workaround when writing "
-                             "to an intermediate r8uint texture.",
-                             textureCopy.texture.Get());
+            DAWN_TRY_CONTEXT(
+                WriteTextureImpl(destinationDataTexture, data, dataLayout, writeSizePixel),
+                "writing to stencil aspect of %s using blit workaround when writing "
+                "to an intermediate r8uint texture.",
+                textureCopy.texture.Get());
         }
 
         // Blit from R8Uint texture to the stencil texture.
@@ -159,7 +159,7 @@ MaybeError Queue::WriteTextureImpl(const TexelCopyTextureInfo& destination,
         Ref<CommandBufferBase> commandBuffer;
         DAWN_TRY_ASSIGN(commandBuffer, commandEncoder->Finish());
         CommandBufferBase* commands = commandBuffer.Get();
-        APISubmit(1, &commands);
+        APISubmit(SpanFromRef(commands));
         return {};
     }
 
@@ -173,14 +173,14 @@ MaybeError Queue::WriteTextureImpl(const TexelCopyTextureInfo& destination,
     }
 
     return device->EnqueueGL(
-        data, dataSize,
+        data,
         [ensureInitialized, dest = Ref<Texture>(ToBackend(destination.texture)), range, textureCopy,
          dataLayout = TexelCopyBufferLayout(dataLayout), writeSizePixel = Extent3D(writeSizePixel)](
-            const OpenGLFunctions& gl, const void* data, size_t dataSize) -> MaybeError {
+            const OpenGLFunctions& gl, Span<const std::byte> data) -> MaybeError {
             if (ensureInitialized) {
                 DAWN_TRY(dest->EnsureSubresourceContentInitialized(gl, range));
             }
-            return DoTexSubImage(gl, textureCopy, data, dataLayout, writeSizePixel);
+            return DoTexSubImage(gl, textureCopy, data.data(), dataLayout, writeSizePixel);
         });
 }
 
@@ -289,12 +289,12 @@ ResultOrError<Ref<SharedFence>> Queue::GetOrCreateSharedFence(ExecutionSerial la
             // the sync.
             DAWN_GL_TRY(gl, Flush());
 
-            utils::SystemHandle handle;
+            SystemHandle handle;
             if (type == wgpu::SharedFenceType::SyncFD) {
                 EGLint fd;
                 DAWN_TRY_ASSIGN(fd, sync->DupFD(gl));
 
-                handle = utils::SystemHandle::Acquire(fd);
+                handle = SystemHandle::Acquire(fd);
             }
             return AcquireRef(new SharedFenceEGL(ToBackend(GetDevice()), "Internal EGLSync", type,
                                                  std::move(handle), sync));

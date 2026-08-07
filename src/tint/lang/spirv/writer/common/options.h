@@ -143,6 +143,9 @@ struct Options {
         /// Set to `true` to collapse redundant subgroup min and max operations
         bool collapse_subgroup_min_max = false;
 
+        /// Set to `true` to replace atomicStore in workgroup memory with atomicExchange.
+        bool replace_workgroup_atomic_store_with_exchange = false;
+
         TINT_REFLECT(Workarounds,
                      polyfill_case_switch,
                      scalarize_max_min_clamp,
@@ -158,7 +161,8 @@ struct Options {
                      polyfill_distance_scalar_float,
                      polyfill_saturate_as_min_max_f16,
                      cooperative_matrix_stride_is_matrix_elements,
-                     collapse_subgroup_min_max);
+                     collapse_subgroup_min_max,
+                     replace_workgroup_atomic_store_with_exchange);
     };
 
     /// Any options which are controlled by the presence/absence of a vulkan extension.
@@ -196,6 +200,14 @@ struct Options {
         /// ...>.
         bool use_uniform_buffers = false;
 
+        /// Set to `true` to add `MaximallyReconvergesKHR` to entry points.
+        /// Takes precedence over `use_subgroup_uniform_control_flow`.
+        bool use_maximal_reconvergence = false;
+
+        /// Set to `true` to add `SubgroupUniformControlFlowKHR` to compute and fragment entry
+        /// points.
+        bool use_subgroup_uniform_control_flow = false;
+
         TINT_REFLECT(Extensions,
                      use_demote_to_helper_invocation,
                      use_storage_input_output_16,
@@ -204,7 +216,9 @@ struct Options {
                      disable_image_robustness,
                      disable_runtime_sized_array_index_clamping,
                      dot_4x8_packed,
-                     use_uniform_buffers);
+                     use_uniform_buffers,
+                     use_maximal_reconvergence,
+                     use_subgroup_uniform_control_flow);
     };
 
     ///////////////////////////////////////////////////////////////////////////////////////////
@@ -274,6 +288,10 @@ struct Options {
     // Configuration for substitute overrides
     SubstituteOverridesConfig substitute_overrides_config{};
 
+    /// Minimum size in bytes of all immediate data in the pipeline, both internal and
+    /// user-defined. Used to size the decomposed immediate array.
+    uint32_t minimum_immediate_size = 0;
+
     /// Reflect the fields of this class so that it can be used by tint::ForeachField()
     TINT_REFLECT(Options,
                  entry_point_name,
@@ -294,7 +312,8 @@ struct Options {
                  depth_range_offsets,
                  spirv_version,
                  resource_table,
-                 substitute_overrides_config);
+                 substitute_overrides_config,
+                 minimum_immediate_size);
 };
 
 }  // namespace tint::spirv::writer

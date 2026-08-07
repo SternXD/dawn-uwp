@@ -32,6 +32,7 @@
 
 #include <memory>
 #include <optional>
+#include <variant>
 
 #include "dawn/wire/WireCmd_autogen.h"
 #include "dawn/wire/client/ApiObjects_autogen.h"
@@ -50,16 +51,17 @@ class Queue;
 class Device final : public RefCountedWithExternalCount<ObjectWithEventsBase> {
   public:
     Device(const ObjectBaseParams& params,
-           const ObjectHandle& eventManagerHandle,
+           Ref<Instance> instance,
            Adapter* adapter,
-           const WGPUDeviceDescriptor* descriptor);
+           const DeviceDescriptor* descriptor);
 
     ObjectType GetObjectType() const override;
 
-    void SetLimits(const WGPULimits* limits);
-    void SetFeatures(const WGPUFeatureName* features, uint32_t featuresCount);
+    void SetLimits(const Limits* limits);
+    void SetFeatures(Span<const wgpu::FeatureName> features);
 
-    bool IsAlive() const;
+    bool IsDestroyed() const;
+    bool IsKnownLost() const;
     Queue* GetQueue();
     const LimitsAndFeatures& GetLimitsAndFeatures() const;
 
@@ -70,28 +72,31 @@ class Device final : public RefCountedWithExternalCount<ObjectWithEventsBase> {
 
     // WebGPU API
     void APISetLoggingCallback(const WGPULoggingCallbackInfo& callbackInfo);
-    void APIInjectError(WGPUErrorType type, WGPUStringView message);
-    WGPUFuture APIPopErrorScope(const WGPUPopErrorScopeCallbackInfo& callbackInfo);
+    void APIInjectError(wgpu::ErrorType type, StringView message);
+    Future APIPopErrorScope(const WGPUPopErrorScopeCallbackInfo& callbackInfo);
 
-    WGPUBuffer APICreateBuffer(const WGPUBufferDescriptor* descriptor);
-    WGPUBuffer APICreateErrorBuffer(const WGPUBufferDescriptor* descriptor);
-    WGPUFuture APICreateComputePipelineAsync(
-        WGPUComputePipelineDescriptor const* descriptor,
+    template <typename PipelineT, typename CmdT>
+    Ref<PipelineT> CreateErrorPipeline(WGPUStringView label);
+
+    Buffer* APICreateBuffer(const BufferDescriptor* descriptor);
+    Buffer* APICreateErrorBuffer(const BufferDescriptor* descriptor);
+    Future APICreateComputePipelineAsync(
+        const ComputePipelineDescriptor* descriptor,
         const WGPUCreateComputePipelineAsyncCallbackInfo& callbackInfo);
-    WGPUFuture APICreateRenderPipelineAsync(
-        WGPURenderPipelineDescriptor const* descriptor,
+    Future APICreateRenderPipelineAsync(
+        const RenderPipelineDescriptor* descriptor,
         const WGPUCreateRenderPipelineAsyncCallbackInfo& callbackInfo);
-    WGPUResourceTable APICreateResourceTable(const WGPUResourceTableDescriptor* descriptor);
-    WGPUTexture APICreateTexture(const WGPUTextureDescriptor* descriptor);
-    WGPUTexture APICreateErrorTexture(const WGPUTextureDescriptor* descriptor);
+    ResourceTable* APICreateResourceTable(const ResourceTableDescriptor* descriptor);
+    Texture* APICreateTexture(const TextureDescriptor* descriptor);
+    Texture* APICreateErrorTexture(const TextureDescriptor* descriptor);
 
-    WGPUStatus APIGetLimits(WGPULimits* limits) const;
-    WGPUFuture APIGetLostFuture();
-    bool APIHasFeature(WGPUFeatureName feature) const;
-    void APIGetFeatures(WGPUSupportedFeatures* features) const;
-    WGPUStatus APIGetAdapterInfo(WGPUAdapterInfo* info) const;
-    WGPUAdapter APIGetAdapter() const;
-    WGPUQueue APIGetQueue();
+    wgpu::Status APIGetLimits(Limits* limits) const;
+    Future APIGetLostFuture();
+    bool APIHasFeature(wgpu::FeatureName feature) const;
+    void APIGetFeatures(SupportedFeatures* features) const;
+    wgpu::Status APIGetAdapterInfo(AdapterInfo* info) const;
+    Adapter* APIGetAdapter() const;
+    Queue* APIGetQueue();
 
     void APIDestroy();
 
@@ -101,7 +106,7 @@ class Device final : public RefCountedWithExternalCount<ObjectWithEventsBase> {
               typename Cmd,
               typename CallbackInfo = typename Event::CallbackInfo,
               typename Descriptor = decltype(std::declval<Cmd>().descriptor)>
-    WGPUFuture CreatePipelineAsync(Descriptor const* descriptor, const CallbackInfo& callbackInfo);
+    Future CreatePipelineAsync(Descriptor const* descriptor, const CallbackInfo& callbackInfo);
 
     LimitsAndFeatures mLimitsAndFeatures;
     std::variant<Ref<TrackedEvent>, FutureID> mDeviceLostInfo;
@@ -110,7 +115,16 @@ class Device final : public RefCountedWithExternalCount<ObjectWithEventsBase> {
 
     Ref<Adapter> mAdapter;
     Ref<Queue> mQueue;
-    bool mIsAlive = true;
+
+    // Note that we differentiate between destroyed and lost in that destroyed is a client-side
+    // state that is immediately set once `APIDestroy()` is called, whereas lost is a server-side
+    // state that is updated only once our lost callback has been completed. The destroyed state is,
+    // as of writing, only really needed for buffer mapping because device.Destroy() is supposed to
+    // explicitly unmap all buffers, but don't currently handle that exactly in the wire, so the
+    // destroyed state is used to help simulate that. Pretty much everything else should be relying
+    // on the lost state.
+    bool mIsDestroyed = false;
+    bool mIsLost = false;
 };
 
 }  // namespace dawn::wire::client

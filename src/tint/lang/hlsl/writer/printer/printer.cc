@@ -156,6 +156,7 @@ StringStream& operator<<(StringStream& s, const RegisterAndSpace& rs) {
 
 // The list of properties that are not supported.
 const core::ir::Properties kUnsupportedProperties{
+    core::ir::Property::kAllow8BitIntegers,
     core::ir::Property::kAllowMultipleEntryPoints,
     core::ir::Property::kAllowOverrides,
 };
@@ -170,7 +171,7 @@ class Printer : public tint::TextGenerator {
 
     /// @returns the generated HLSL shader
     tint::Result<Output> Generate() {
-        AssertValid(ir_, kPrinterCapabilities, "before hlsl.Printer");
+        AssertValid(ir_, "before hlsl.Printer");
         AssertNoUnsupportedProperties(ir_, kUnsupportedProperties);
 
         // Emit module-scope declarations.

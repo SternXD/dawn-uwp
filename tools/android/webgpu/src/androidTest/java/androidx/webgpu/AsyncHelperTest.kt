@@ -22,7 +22,6 @@ import androidx.webgpu.helper.createWebGpu
 import java.util.concurrent.Executors
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExecutorCoroutineDispatcher
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
@@ -30,7 +29,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertThrows
 import org.junit.Assume.assumeFalse
 import org.junit.Before
 import org.junit.Test
@@ -86,7 +84,7 @@ class AsyncHelperTest {
 
         val exception = assertThrowsSuspend(WebGpuException::class.java) {
           /* Call an asynchronous method, converted from a callback pattern by a helper. */
-          device.createRenderPipelineAndAwait(
+          val unused = device.createRenderPipelineAndAwait(
             GPURenderPipelineDescriptor(vertex = GPUVertexState(module = shaderModule))
           )
         }

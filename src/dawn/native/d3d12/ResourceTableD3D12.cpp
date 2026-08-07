@@ -41,6 +41,7 @@
 #include "src/dawn/native/d3d12/SamplerD3D12.h"
 #include "src/dawn/native/d3d12/ShaderVisibleDescriptorAllocatorD3D12.h"
 #include "src/dawn/native/d3d12/StagingDescriptorAllocatorD3D12.h"
+#include "src/dawn/native/d3d12/TextureD3D12.h"
 #include "src/utils/compiler.h"
 
 namespace dawn::native::d3d12 {
@@ -253,7 +254,7 @@ MaybeError ResourceTable::Initialize() {
     desc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
     desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     desc.Buffer.FirstElement = 0;
-    desc.Buffer.NumElements = metadataBuffer->GetSize() / 4;
+    desc.Buffer.NumElements = checked_cast<UINT>(metadataBuffer->GetSize() / 4);
     desc.Buffer.StructureByteStride = 0;
     desc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_RAW;
 
@@ -302,9 +303,15 @@ void ResourceTable::FreeCPUHeap(ResourceTable::Heap& heap) {
     heap.numDescriptors = 0;
 }
 
-// Apply updates to resources or to the metadata buffers that are pending.
-MaybeError ResourceTable::ApplyPendingUpdates(CommandRecordingContext* recordingContext) {
-    Updates updates = AcquireDirtySlotUpdates();
+MaybeError ResourceTable::ApplyPendingUpdates(
+    CommandRecordingContext* recordingContext,
+    const absl::flat_hash_set<TextureBase*>& writableTextures) {
+    Updates updates = AcquireDirtySlotUpdates(writableTextures);
+
+    // Transition and initialize all required textures
+    if (!updates.texturesToTransition.empty()) {
+        DAWN_TRY(TransitionResources(recordingContext, updates.texturesToTransition));
+    }
 
     // Update resource bindings before metadata to ensure mSlotToSamplerIndex is up-to-date
     if (!updates.resourceDiffs.empty()) {
@@ -317,6 +324,20 @@ MaybeError ResourceTable::ApplyPendingUpdates(CommandRecordingContext* recording
     return {};
 }
 
+MaybeError ResourceTable::TransitionResources(
+    CommandRecordingContext* recordingContext,
+    const absl::flat_hash_set<Ref<TextureBase>>& textures) {
+    for (const auto& texture : textures) {
+        Texture* textureBackend = ToBackend(texture.Get());
+        DAWN_TRY(textureBackend->EnsureSubresourceContentInitialized(
+            recordingContext, textureBackend->GetAllSubresources()));
+        textureBackend->TrackUsageAndTransitionNow(recordingContext,
+                                                   wgpu::TextureUsage::TextureBinding,
+                                                   textureBackend->GetAllSubresources());
+    }
+    return {};
+}
+
 MaybeError ResourceTable::UpdateMetadataBuffer(CommandRecordingContext* recordingContext,
                                                const std::vector<MetadataUpdate>& updates) {
     // For metadata updates, we already created an SRV for metadata buffer in Initialize(), so all
@@ -324,6 +345,7 @@ MaybeError ResourceTable::UpdateMetadataBuffer(CommandRecordingContext* recordin
     Device* device = ToBackend(GetDevice());
 
     // Allocate enough space for all the data to modify and schedule the copies.
+    // TODO(https://crbug.com/534203108): Spanify WithUploadReservation.
     return device->GetDynamicUploader()->WithUploadReservation(
         sizeof(uint32_t) * updates.size(), kCopyBufferToBufferOffsetAlignment,
         [&](UploadReservation reservation) -> MaybeError {

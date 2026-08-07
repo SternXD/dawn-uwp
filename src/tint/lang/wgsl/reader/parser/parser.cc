@@ -142,6 +142,7 @@ class Parser::MultiTokenSource {
 
     /// @returns the Source that returns the combined source from start to the current last token's
     /// source.
+    // NOLINTNEXTLINE(google-explicit-constructor)
     operator tint::Source() const {
         auto end = parser_->last_source().End();
         if (end < start_) {
@@ -714,11 +715,14 @@ Maybe<const ast::Variable*> Parser::global_constant_decl(AttributeList& attrs) {
                                  initializer,        // initializer
                                  std::move(attrs));  // attributes
     }
-    return builder_.GlobalConst(decl_source(),      // source
-                                decl->name,         // symbol
-                                decl->type,         // type
-                                initializer,        // initializer
-                                std::move(attrs));  // attributes
+
+    if (!attrs.IsEmpty()) {
+        return AddError(decl_source(), use + std::string(" does not accept attributes"));
+    }
+    return builder_.GlobalConst(decl_source(),  // source
+                                decl->name,     // symbol
+                                decl->type,     // type
+                                initializer);   // initializer
 }
 
 // variable_decl

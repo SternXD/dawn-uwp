@@ -47,6 +47,7 @@
 #include "src/dawn/native/opengl/PipelineLayoutGL.h"
 #include "src/dawn/native/opengl/UtilsGL.h"
 #include "src/dawn/platform/tracing/TraceEvent.h"
+#include "src/utils/numeric.h"
 #include "tint/tint.h"
 
 namespace dawn::native::opengl {
@@ -451,7 +452,8 @@ ResultOrError<TranslatedShader> ShaderModule::TranslateToGLSL(
     // element byte size and pass that to Tint.
     auto immediateCount = RoundUp(pipelineImmediateMask.count(), 4u);
 
-    req.tintOptions.minimum_immediate_size = immediateCount * kImmediateElementByteSize;
+    req.tintOptions.minimum_immediate_size =
+        checked_cast<uint32_t>(immediateCount * kImmediateElementByteSize);
     if (HasImmediates(&RenderImmediates::firstVertex, pipelineImmediateMask)) {
         req.tintOptions.first_vertex_offset = GetImmediateByteOffsetInPipelineIfAny(
             &RenderImmediates::firstVertex, pipelineImmediateMask);

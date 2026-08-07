@@ -69,6 +69,8 @@ tint_add_target(tint_lang_core_ir_transform lib
   lang/core/ir/transform/demote_to_helper.h
   lang/core/ir/transform/direct_variable_access.cc
   lang/core/ir/transform/direct_variable_access.h
+  lang/core/ir/transform/lower_swizzle_view.cc
+  lang/core/ir/transform/lower_swizzle_view.h
   lang/core/ir/transform/multiplanar_external_texture.cc
   lang/core/ir/transform/multiplanar_external_texture.h
   lang/core/ir/transform/multiplanar_options.h
@@ -162,6 +164,7 @@ tint_add_target(tint_lang_core_ir_transform_test test
   lang/core/ir/transform/demote_to_helper_test.cc
   lang/core/ir/transform/direct_variable_access_test.cc
   lang/core/ir/transform/helper_test.h
+  lang/core/ir/transform/lower_swizzle_view_test.cc
   lang/core/ir/transform/multiplanar_external_texture_test.cc
   lang/core/ir/transform/prepare_immediate_data_test.cc
   lang/core/ir/transform/preserve_padding_test.cc
@@ -210,9 +213,11 @@ tint_target_add_external_dependencies(tint_lang_core_ir_transform_test test
   "src_utils"
 )
 
+if(TINT_BUILD_FUZZERS)
 ################################################################################
 # Target:    tint_lang_core_ir_transform_fuzz
 # Kind:      fuzz
+# Condition: TINT_BUILD_FUZZERS
 ################################################################################
 tint_add_target(tint_lang_core_ir_transform_fuzz fuzz
   lang/core/ir/transform/array_length_from_uniform_fuzz.cc
@@ -264,3 +269,5 @@ tint_target_add_dependencies(tint_lang_core_ir_transform_fuzz fuzz
 tint_target_add_external_dependencies(tint_lang_core_ir_transform_fuzz fuzz
   "src_utils"
 )
+
+endif(TINT_BUILD_FUZZERS)

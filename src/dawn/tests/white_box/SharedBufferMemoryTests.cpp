@@ -29,6 +29,7 @@
 
 #include <gtest/gtest.h>
 
+#include <span>
 #include <vector>
 
 #include "src/dawn/tests/DawnTest.h"
@@ -101,7 +102,7 @@ namespace {
 
 constexpr uint32_t kBufferData = 0x76543210;
 constexpr uint32_t kBufferData2 = 0x01234567;
-constexpr uint32_t kBufferSize = 4;
+constexpr uint32_t kBufferSize = sizeof(uint32_t);
 constexpr wgpu::BufferUsage kMapWriteUsages =
     wgpu::BufferUsage::MapWrite | wgpu::BufferUsage::CopySrc;
 constexpr wgpu::BufferUsage kMapReadUsages =
@@ -193,9 +194,23 @@ TEST_P(SharedBufferMemoryTests, SizeValidation) {
 
     wgpu::BufferDescriptor bufferDesc = {};
     bufferDesc.usage = properties.usage;
+
+    // Buffer size larger than shared memory size should fail.
     bufferDesc.size = properties.size + 1;
     ASSERT_DEVICE_ERROR_MSG(memory.CreateBuffer(&bufferDesc),
-                            HasSubstr("doesn't match descriptor size"));
+                            HasSubstr("is larger than SharedBufferMemory size"));
+
+    // Buffer size equal to shared memory size should succeed.
+    bufferDesc.size = properties.size;
+    wgpu::Buffer buffer = memory.CreateBuffer(&bufferDesc);
+    EXPECT_NE(buffer, nullptr);
+
+    // Buffer size smaller than shared memory size should succeed.
+    if (properties.size > 4) {
+        bufferDesc.size = properties.size - 4;
+        wgpu::Buffer smallerBuffer = memory.CreateBuffer(&bufferDesc);
+        EXPECT_NE(smallerBuffer, nullptr);
+    }
 }
 
 // Tests that creating SharedBufferMemory validates buffer usages.
@@ -221,20 +236,6 @@ TEST_P(SharedBufferMemoryTests, UsageValidation) {
             ASSERT_DEVICE_ERROR(memory.CreateBuffer(&bufferDesc));
         }
     }
-}
-
-// Tests that creating SharedBufferMemory emits a specific error message if Uniform usage specified.
-TEST_P(SharedBufferMemoryTests, UniformUsageValidation) {
-    wgpu::SharedBufferMemory memory =
-        GetParam().mBackend->CreateSharedBufferMemory(device, kMapWriteUsages, kBufferSize);
-    wgpu::SharedBufferMemoryProperties properties;
-    memory.GetProperties(&properties);
-
-    wgpu::BufferDescriptor bufferDesc = {};
-    bufferDesc.size = properties.size;
-    bufferDesc.usage = properties.usage | wgpu::BufferUsage::Uniform;
-
-    ASSERT_DEVICE_ERROR_MSG(memory.CreateBuffer(&bufferDesc), HasSubstr("Uniform"));
 }
 
 // Test that it is an error to call BeginAccess with fenceCount != signaledValueCount
@@ -441,7 +442,7 @@ TEST_P(SharedBufferMemoryTests, BeginAccessInitialization) {
     MapAsyncAndWait(buffer, wgpu::MapMode::Write, 0, kBufferSize);
 
     uint32_t* mappedData = static_cast<uint32_t*>(buffer.GetMappedRange(0, kBufferSize));
-    DAWN_UNSAFE_TODO(memcpy(mappedData, &kBufferData, kBufferSize));
+    *mappedData = kBufferData;
     buffer.Unmap();
 
     wgpu::SharedBufferMemoryEndAccessState endState;
@@ -539,7 +540,7 @@ TEST_P(SharedBufferMemoryTests, ReadWriteSharedMapWriteBuffer) {
     MapAsyncAndWait(buffer, wgpu::MapMode::Write, 0, kBufferSize);
 
     uint32_t* mappedData = static_cast<uint32_t*>(buffer.GetMappedRange(0, kBufferSize));
-    DAWN_UNSAFE_TODO(memcpy(mappedData, &kBufferData2, kBufferSize));
+    *mappedData = kBufferData2;
     buffer.Unmap();
 
     EXPECT_BUFFER_U32_EQ(kBufferData2, buffer, 0);
@@ -778,7 +779,7 @@ TEST_P(SharedBufferMemoryTests, WriteBufferEnsureSynchronization) {
     memory.BeginAccess(buffer, &beginAccessDesc);
 
     constexpr uint32_t bufferData[] = {kBufferData, kBufferData};
-    wgpu::Buffer srcBuffer = utils::CreateBufferFromData(device, bufferData, kBufferSize * 2,
+    wgpu::Buffer srcBuffer = utils::CreateBufferFromData(device, bufferData, kBufferSize * 2ULL,
                                                          wgpu::BufferUsage::CopySrc);
     wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
     encoder.CopyBufferToBuffer(srcBuffer, 0, buffer, 0, 4);
@@ -866,6 +867,106 @@ TEST_P(SharedBufferMemoryTests, MapAsyncEnsureSynchronization) {
     ASSERT_EQ(*mappedData, kBufferData);
 
     buffer2.Unmap();
+}
+
+// Test that creating a buffer from SharedBufferMemory with mappedAtCreation works correctly
+// when the shared buffer memory has MapWrite usage.
+TEST_P(SharedBufferMemoryTests, CreateBufferMappedAtCreation) {
+    wgpu::SharedBufferMemory memory =
+        GetParam().mBackend->CreateSharedBufferMemory(device, kMapWriteUsages, kBufferSize);
+    wgpu::SharedBufferMemoryProperties properties;
+    memory.GetProperties(&properties);
+
+    wgpu::BufferDescriptor bufferDesc = {};
+    bufferDesc.size = properties.size;
+    bufferDesc.usage = kMapWriteUsages;
+    bufferDesc.mappedAtCreation = true;
+
+    wgpu::SharedBufferMemoryBeginAccessDescriptor beginAccessDesc;
+    beginAccessDesc.initialized = false;
+
+    wgpu::Buffer buffer = memory.CreateBuffer(&bufferDesc);
+    memory.BeginAccess(buffer, &beginAccessDesc);
+
+    // Write data directly through the mapped range.
+    uint32_t* mappedData = static_cast<uint32_t*>(buffer.GetMappedRange(0, kBufferSize));
+    ASSERT_NE(mappedData, nullptr);
+    *mappedData = kBufferData;
+    buffer.Unmap();
+
+    // Verify the written data is correct by reading it back.
+    EXPECT_BUFFER_U32_EQ(kBufferData, buffer, 0);
+
+    wgpu::SharedBufferMemoryEndAccessState endState;
+    memory.EndAccess(buffer, &endState);
+    EXPECT_EQ(endState.initialized, true);
+}
+
+// Test that creating a buffer from shared buffer memory with `mappedAtCreation = true` and no
+// `MapWrite` usage correctly handles the `initialized` flag in `BeginAccess()`:
+// - `initialized = true` preserves the original data in the buffer at untouched offsets.
+// - `initialized = false` clears the entire buffer to zero regardless of the original data.
+// Also verifies that the second BeginAccess (after the buffer is no longer MappedAtCreation)
+// correctly preserves the data written during the first access.
+TEST_P(SharedBufferMemoryTests, CreateBufferMappedAtCreationOnSharedBufferMemoryNoMapWriteUsage) {
+    constexpr uint32_t kInitialData = 0x12345678;
+    constexpr uint32_t kWrittenData = 0x9ABCDEF0;
+    constexpr uint32_t kTotalBufferSize = sizeof(uint32_t) * 2;
+
+    auto runScenario = [&](bool initialized, uint32_t expectedAtOffset0) {
+        SCOPED_TRACE(testing::Message() << "initialized=" << initialized);
+
+        wgpu::SharedBufferMemory memory = GetParam().mBackend->CreateSharedBufferMemory(
+            device, kStorageUsages, kTotalBufferSize, kInitialData);
+
+        // `mappedAtCreation == true` is only allowed when the shared buffer memory is CPU
+        // accessible.
+        wgpu::SharedBufferMemoryProperties properties;
+        memory.GetProperties(&properties);
+        if (!(properties.usage & wgpu::BufferUsage::MapWrite)) {
+            return;
+        }
+
+        wgpu::BufferDescriptor bufferDesc = {};
+        bufferDesc.size = kTotalBufferSize;
+        bufferDesc.usage = kStorageUsages;
+        bufferDesc.mappedAtCreation = true;
+        wgpu::Buffer buffer = memory.CreateBuffer(&bufferDesc);
+
+        // First access: buffer is in MappedAtCreation state.
+        wgpu::SharedBufferMemoryBeginAccessDescriptor beginAccessDesc = {};
+        beginAccessDesc.initialized = initialized;
+        memory.BeginAccess(buffer, &beginAccessDesc);
+
+        // Write kWrittenData at offset sizeof(uint32_t); leave offset 0 untouched.
+        uint32_t* mappedData = static_cast<uint32_t*>(buffer.GetMappedRange(0, kTotalBufferSize));
+        ASSERT_NE(mappedData, nullptr);
+        std::span<uint32_t> mappedSpan(mappedData, kTotalBufferSize / sizeof(uint32_t));
+        mappedSpan[1] = kWrittenData;
+        buffer.Unmap();
+
+        EXPECT_BUFFER_U32_EQ(expectedAtOffset0, buffer, 0);
+        EXPECT_BUFFER_U32_EQ(kWrittenData, buffer, sizeof(uint32_t));
+
+        wgpu::SharedBufferMemoryEndAccessState endState = {};
+        memory.EndAccess(buffer, &endState);
+
+        // Second access: buffer is now in Unmapped state (no longer MappedAtCreation).
+        // Verify that the data written during the first access is preserved.
+        beginAccessDesc = {};
+        beginAccessDesc.initialized = true;
+        memory.BeginAccess(buffer, &beginAccessDesc);
+
+        EXPECT_BUFFER_U32_EQ(expectedAtOffset0, buffer, 0);
+        EXPECT_BUFFER_U32_EQ(kWrittenData, buffer, sizeof(uint32_t));
+
+        memory.EndAccess(buffer, &endState);
+    };
+
+    // `initialized = true`: the original data at offset 0 is preserved.
+    runScenario(true, kInitialData);
+    // `initialized = false`: the original data at offset 0 is cleared to zero.
+    runScenario(false, 0u);
 }
 
 GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(SharedBufferMemoryTests);

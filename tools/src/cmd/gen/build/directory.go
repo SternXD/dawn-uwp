@@ -49,6 +49,8 @@ type Directory struct {
 	SubdirectoryNames container.Set[string]
 	// The names of all targets of this directory
 	TargetNames container.Set[TargetName]
+	// The optional condition for building this directory
+	Condition Condition
 }
 
 // AbsPath returns an absolute path for this directory
@@ -78,6 +80,16 @@ func (d *Directory) Subdirectories() []*Directory {
 		out[i] = d.Project.Directories[path.Join(d.Path, name)]
 	}
 	return out
+}
+
+// HasObjcSources returns true if any target in this directory has Objective-C++ sources.
+func (d *Directory) HasObjcSrcs() bool {
+	for _, target := range d.Targets() {
+		if target.HasObjcSrcs() {
+			return true
+		}
+	}
+	return false
 }
 
 // DecomposedConditionals returns the combined decomposed ANDs, ORs and unary expressions of all

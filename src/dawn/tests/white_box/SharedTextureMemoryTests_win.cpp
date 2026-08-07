@@ -41,14 +41,12 @@
 #include "dawn/native/D3D11Backend.h"
 #include "dawn/native/D3DBackend.h"
 #include "dawn/native/DawnNative.h"
+#include "src/dawn/common/SystemHandle.h"
 #include "src/dawn/tests/white_box/SharedTextureMemoryTests.h"
-#include "src/dawn/utils/SystemHandle.h"
 #include "src/utils/compiler.h"
 
 namespace dawn {
 namespace {
-
-using dawn::utils::SystemHandle;
 using Microsoft::WRL::ComPtr;
 
 enum class Mode {
@@ -476,9 +474,9 @@ TEST_P(SharedTextureMemoryTests, SharedFenceSuccessfulImportExport) {
     hr = d3d11DeviceContext4->Signal(d3d11Fence.Get(), fenceValue + 1);
     ASSERT_EQ(hr, S_OK);
 
-    SystemHandle ev = SystemHandle::Acquire(::CreateEvent(NULL,   // default security attributes
-                                                          TRUE,   // manual-reset event
-                                                          FALSE,  // initial state is nonsignaled
+    SystemHandle ev = SystemHandle::Acquire(::CreateEvent(nullptr,  // default security attributes
+                                                          TRUE,     // manual-reset event
+                                                          FALSE,    // initial state is nonsignaled
                                                           TEXT("FenceComplete")  // object name
                                                           ));
     ASSERT_TRUE(ev.IsValid());

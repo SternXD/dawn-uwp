@@ -105,6 +105,32 @@
 #endif
 #endif
 
+// DAWN_MSAN_ENABLED()
+//
+// Checks whether MSan is enabled.
+#if DAWN_COMPILER_IS(CLANG)
+#define DAWN_MSAN_ENABLED() __has_feature(memory_sanitizer)
+#elif DAWN_COMPILER_IS(GCC) || DAWN_COMPILER_IS(MSVC)
+#if defined(__SANITIZE_ADDRESS__)
+#define DAWN_MSAN_ENABLED() 1
+#else
+#define DAWN_MSAN_ENABLED() 0
+#endif
+#endif
+
+// DAWN_UBSAN_ENABLED()
+//
+// Checks whether the undefined behavior sanitizer is enabled.
+#if DAWN_COMPILER_IS(CLANG)
+#define DAWN_UBSAN_ENABLED() __has_feature(undefined_behavior_sanitizer)
+#elif DAWN_COMPILER_IS(GCC) || DAWN_COMPILER_IS(MSVC)
+#if defined(__SANITIZE_UNDEFINED__)
+#define DAWN_UBSAN_ENABLED() 1
+#else
+#define DAWN_UBSAN_ENABLED() 0
+#endif
+#endif
+
 // DAWN_NO_SANITIZE(instrumentation)
 //
 // Annotate a function or a global variable declaration to specify that a particular instrumentation

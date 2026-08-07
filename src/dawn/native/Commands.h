@@ -44,6 +44,7 @@
 namespace dawn::native {
 
 class CommandAllocator;
+class CommandIterator;
 struct TexelBlockInfo;
 struct TexelCopyTextureInfo;
 
@@ -51,7 +52,7 @@ struct TexelCopyTextureInfo;
 // CommandBufferBuilder. There are not defined in CommandBuffer.h to break some header
 // dependencies: Ref<Object> needs Object to be defined.
 
-enum class Command {
+enum class Command : uint32_t {
     BeginComputePass,
     BeginOcclusionQuery,
     BeginRenderPass,
@@ -332,7 +333,7 @@ struct EndRenderPassCmd {
 };
 
 struct ExecuteBundlesCmd {
-    uint32_t count = 0;
+    size_t count = 0;
 };
 
 struct ClearBufferCmd {
@@ -411,7 +412,7 @@ struct SetBindGroupCmd {
 
     BindGroupIndex index = BindGroupIndex(0u);
     Ref<BindGroupBase> group;
-    uint32_t dynamicOffsetCount = 0;
+    BindingIndex dynamicOffsetCount = BindingIndex{0u};
 };
 
 struct SetImmediatesCmd {
@@ -419,7 +420,7 @@ struct SetImmediatesCmd {
     ~SetImmediatesCmd();
 
     uint32_t offset = 0;
-    uint32_t size = 0;
+    size_t size = 0;
 };
 
 struct SetIndexBufferCmd {
@@ -455,7 +456,7 @@ struct WriteBufferCmd {
 
     Ref<BufferBase> buffer;
     uint64_t offset = 0;
-    uint64_t size = 0;
+    size_t size = 0;
 };
 
 struct WriteTimestampCmd {
@@ -475,8 +476,12 @@ void FreeCommands(CommandIterator* commands);
 // consuming the correct amount of data from the command iterator.
 void SkipCommand(CommandIterator* commands, Command type);
 
-// Helper function to copy a wgpu::StringView into a safely null-terminated C-string in commands.
-const char* AddNullTerminatedString(CommandAllocator* allocator, StringView s, size_t* length);
+// Helper function to copy a wgpu::StringView into the command stream, writing out its size.
+std::string_view AddNullTerminatedString(CommandAllocator* allocator,
+                                         std::string_view s,
+                                         size_t* length);
+// Mirror function that gets the same string back as a null-terminated string_view.
+std::string_view NextNullTerminatedString(CommandIterator* iterator, size_t length);
 
 }  // namespace dawn::native
 

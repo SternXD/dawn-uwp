@@ -103,13 +103,6 @@ void AdapterBase::UpdateLimits() {
     if (mUseTieredLimits) {
         ApplyLimitTiers(&mLimits);
     }
-
-    // If immediates are not enabled (e.g. blocklisted), report a maxImmediateSize of 0.
-    // TODO(crbug.com/366291600): Remove when immediates are implemented on all backends and
-    // not be blocklisted.
-    if (!GetInstance()->HasFeature(wgpu::WGSLLanguageFeatureName::ImmediateAddressSpace)) {
-        mLimits.v1.maxImmediateSize = 0;
-    }
 }
 
 const CombinedLimits& AdapterBase::GetLimits() const {
@@ -288,10 +281,8 @@ ResultOrError<Ref<DeviceBase>> AdapterBase::CreateDeviceInternal(
     // Backend-specific forced and default device toggles
     mPhysicalDevice->SetupBackendDeviceToggles(mInstance->GetPlatform(), &deviceToggles);
 
-    std::unordered_set<wgpu::FeatureName> requiredFeatureSet;
-    for (uint32_t i = 0; i < descriptor->requiredFeatureCount; ++i) {
-        requiredFeatureSet.insert(DAWN_UNSAFE_TODO(descriptor->requiredFeatures[i]));
-    }
+    std::unordered_set<wgpu::FeatureName> requiredFeatureSet{descriptor->requiredFeatures.begin(),
+                                                             descriptor->requiredFeatures.end()};
 
     // Validate all required features are supported by the adapter and suitable under device
     // toggles. Note that certain toggles in device toggles state may be overridden by user and

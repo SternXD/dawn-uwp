@@ -1400,7 +1400,7 @@ TEST_F(IR_ValidatorTest, Builtin_NumSubgroups_WrongType) {
 )")) << res.Failure();
 }
 
-TEST_F(IR_ValidatorTest, Builtin_PointSize_WithoutCapability) {
+TEST_F(IR_ValidatorTest, Builtin_PointSize_WithoutProperty) {
     const auto position_attr = IOAttributes{.builtin = core::BuiltinValue::kPosition};
     const auto point_size_attr = IOAttributes{.builtin = core::BuiltinValue::kPointSize};
     auto* str_ty = ty.Struct(mod.symbols.New("OutputStruct"),
@@ -1479,10 +1479,13 @@ TEST_F(IR_ValidatorTest, InputAttachmentIndex_NonEntryPoint_InvalidIOKind) {
         << res.Failure();
 }
 
-using BitcastTypeTest = IRTestParamHelper<std::tuple<
-    /* bitcast allowed */ bool,
-    /* src type_builder */ TypeBuilderFn,
-    /* dest type_builder */ TypeBuilderFn>>;
+struct BitcastTypeTest : public IRTestParamHelper<std::tuple<
+                             /* bitcast allowed */ bool,
+                             /* src type_builder */ TypeBuilderFn,
+                             /* dest type_builder */ TypeBuilderFn>> {
+  protected:
+    void SetUp() override { mod.properties.Add(Property::kAllow16BitFloats); }
+};
 
 TEST_P(BitcastTypeTest, Check) {
     bool bitcast_allowed = std::get<0>(GetParam());
@@ -1624,8 +1627,10 @@ TEST_F(IR_ValidatorTest, Builtin_SubgroupMatrixLoad_NegativeOffset) {
 
     auto res = ir::Validate(mod);
     ASSERT_NE(res, Success);
-    EXPECT_THAT(res.Failure().reason,
-                testing::HasSubstr("no matching call to 'subgroupMatrixLoad"));
+    EXPECT_THAT(
+        res.Failure().reason,
+        testing::HasSubstr(
+            "subgroupMatrixLoad: the offset argument of subgroupMatrixLoad must be non-negative"));
 }
 
 TEST_F(IR_ValidatorTest, Builtin_SubgroupMatrixStore_i8_i32_InBoundsOffset) {
@@ -1643,7 +1648,7 @@ TEST_F(IR_ValidatorTest, Builtin_SubgroupMatrixStore_i8_i32_InBoundsOffset) {
         b.Return(f);
     });
 
-    auto res = ir::Validate(mod, core::ir::Capabilities{core::ir::Capability::kAllow8BitIntegers});
+    auto res = ir::Validate(mod);
     ASSERT_EQ(res, Success) << res.Failure();
 }
 
@@ -1662,7 +1667,7 @@ TEST_F(IR_ValidatorTest, Builtin_SubgroupMatrixStore_i8_i32_OOBOffset) {
         b.Return(f);
     });
 
-    auto res = ir::Validate(mod, core::ir::Capabilities{core::ir::Capability::kAllow8BitIntegers});
+    auto res = ir::Validate(mod);
     ASSERT_NE(res, Success);
     EXPECT_THAT(res.Failure().reason,
                 testing::HasSubstr("the offset argument of subgroupMatrixStore (32) is out of "

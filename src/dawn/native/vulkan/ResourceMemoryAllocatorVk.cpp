@@ -28,6 +28,7 @@
 #include "src/dawn/native/vulkan/ResourceMemoryAllocatorVk.h"
 
 #include <algorithm>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -41,6 +42,7 @@
 #include "src/dawn/native/vulkan/FencedDeleter.h"
 #include "src/dawn/native/vulkan/ResourceHeapVk.h"
 #include "src/dawn/native/vulkan/VulkanError.h"
+#include "src/utils/numeric.h"
 
 namespace dawn::native::vulkan {
 
@@ -114,7 +116,7 @@ class ResourceMemoryAllocator::SingleTypeAllocator : public ResourceHeapAllocato
         allocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         allocateInfo.pNext = nullptr;
         allocateInfo.allocationSize = size;
-        allocateInfo.memoryTypeIndex = mMemoryTypeIndex;
+        allocateInfo.memoryTypeIndex = checked_cast<uint32_t>(mMemoryTypeIndex);
 
         VkMemoryDedicatedAllocateInfo dedicatedInfo;
         if (dedicatedImage != VK_NULL_HANDLE) {
@@ -205,11 +207,11 @@ ResultOrError<ResourceMemoryAllocation> ResourceMemoryAllocator::Allocate(
     bool forceDisableSubAllocation,
     VkImage dedicatedImage) {
     // The Vulkan spec guarantees at least one memory type is valid for the
-    // *spec-mandated* kinds, but FindBestTypeIndex can still return -1 for
-    // kinds whose required flags no advertised type carries. Indexing with -1
-    // is UB (reads adjacent heap as a pointer); fail with the inputs instead.
-    int memoryType = FindBestTypeIndex(requirements, kind);
-    if (memoryType < 0) {
+    // *spec-mandated* kinds, but FindBestTypeIndex can still return no value for
+    // kinds whose required flags no advertised type carries. Fail with the inputs
+    // instead of indexing the allocator array with an invalid memory type.
+    auto maybeMemoryType = FindBestTypeIndex(requirements, kind);
+    if (!maybeMemoryType.has_value()) {
         const auto& types = mDevice->GetDeviceInfo().memoryTypes;
         std::string desc;
         for (size_t i = 0; i < types.size(); ++i) {
@@ -221,6 +223,7 @@ ResultOrError<ResourceMemoryAllocation> ResourceMemoryAllocator::Allocate(
                             static_cast<uint32_t>(kind), requirements.memoryTypeBits,
                             static_cast<unsigned long long>(requirements.size), desc.c_str()));
     }
+    uint32_t memoryType = maybeMemoryType.value();
     bool isLazyMemoryType = mAllocatorsPerType[memoryType]->IsLazyMemoryType();
 
     VkDeviceSize size = requirements.size;
@@ -283,6 +286,10 @@ ResultOrError<ResourceMemoryAllocation> ResourceMemoryAllocator::Allocate(
                            "vkMapMemory"),
             { mAllocatorsPerType[memoryType]->DeallocateResourceHeap(std::move(resourceHeap)); });
     }
+    Span<std::byte> mappedSpan =
+        // SAFETY: A successful call to vkMapMemory returns a pointer to `size` bytes of mapped
+        // data. (of the full allocation when size == VK_WHOLE_SIZE).
+        DAWN_UNSAFE_BUFFERS({static_cast<std::byte*>(mappedPointer), checked_cast<size_t>(size)});
 
     mUsedMemoryTracker->Increment(size);
     mLazyUsedMemoryTracker->Increment(isLazyMemoryType ? size : 0);
@@ -291,8 +298,7 @@ ResultOrError<ResourceMemoryAllocation> ResourceMemoryAllocator::Allocate(
     info.mMethod = AllocationMethod::kDirect;
     info.mRequestedSize = size;
     info.mIsLazyAllocated = isLazyMemoryType;
-    return ResourceMemoryAllocation(info, /*offset*/ 0, resourceHeap.release(),
-                                    static_cast<uint8_t*>(mappedPointer));
+    return ResourceMemoryAllocation(info, /*offset*/ 0, resourceHeap.release(), mappedSpan);
 }
 
 void ResourceMemoryAllocator::Deallocate(ResourceMemoryAllocation* allocation) {
@@ -384,8 +390,14 @@ void ResourceMemoryAllocator::Tick(ExecutionSerial completedSerial) {
     mSubAllocationsToDelete.ClearUpTo(completedSerial);
 }
 
-int ResourceMemoryAllocator::FindBestTypeIndex(VkMemoryRequirements requirements, MemoryKind kind) {
-    return mMemoryTypeSelector.FindBestTypeIndex(requirements, kind);
+std::optional<uint32_t> ResourceMemoryAllocator::FindBestTypeIndex(
+    VkMemoryRequirements requirements,
+    MemoryKind kind) {
+    uint32_t index = mMemoryTypeSelector.FindBestTypeIndex(requirements, kind);
+    if (index == kInvalidMemoryTypeIndex) {
+        return std::nullopt;
+    }
+    return index;
 }
 
 void ResourceMemoryAllocator::FreeRecycledMemory() {

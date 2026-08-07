@@ -47,6 +47,7 @@ cc_library(
     "array_offset_from_uniform.cc",
     "binary_polyfill.cc",
     "builtin_polyfill.cc",
+    "decompose_snorm10_10_10_2.cc",
     "decompose_storage_access.cc",
     "extract_ternary_values.cc",
     "localize_struct_array_assignment.cc",
@@ -58,12 +59,14 @@ cc_library(
     "replace_subgroup_matrix_init.cc",
     "resource_table_helper.cc",
     "shader_io.cc",
+    "split_workgroup_atomics.cc",
   ],
   hdrs = [
     "array_offset_from_immediate.h",
     "array_offset_from_uniform.h",
     "binary_polyfill.h",
     "builtin_polyfill.h",
+    "decompose_snorm10_10_10_2.h",
     "decompose_storage_access.h",
     "extract_ternary_values.h",
     "localize_struct_array_assignment.h",
@@ -75,6 +78,7 @@ cc_library(
     "replace_subgroup_matrix_init.h",
     "resource_table_helper.h",
     "shader_io.h",
+    "split_workgroup_atomics.h",
   ],
   deps = [
     "//src/tint/api/common",
@@ -113,6 +117,7 @@ cc_library(
     "array_offset_from_uniform_test.cc",
     "binary_polyfill_test.cc",
     "builtin_polyfill_test.cc",
+    "decompose_snorm10_10_10_2_test.cc",
     "decompose_storage_access_test.cc",
     "extract_ternary_values_test.cc",
     "localize_struct_array_assignment_test.cc",
@@ -122,6 +127,7 @@ cc_library(
     "replace_non_indexable_mat_vec_stores_test.cc",
     "replace_subgroup_matrix_init_test.cc",
     "shader_io_test.cc",
+    "split_workgroup_atomics_test.cc",
   ],
   deps = [
     "//src/tint/api/common",
@@ -154,5 +160,23 @@ cc_library(
   ],
   copts = COPTS,
   visibility = ["//visibility:public"],
+)
+
+alias(
+  name = "tint_build_fuzzers",
+  actual = "//src/tint:tint_build_fuzzers_true",
+)
+
+alias(
+  name = "tint_build_hlsl_writer",
+  actual = "//src/tint:tint_build_hlsl_writer_true",
+)
+
+selects.config_setting_group(
+    name = "tint_build_fuzzers_and_tint_build_hlsl_writer",
+    match_all = [
+        ":tint_build_fuzzers",
+        ":tint_build_hlsl_writer",
+    ],
 )
 

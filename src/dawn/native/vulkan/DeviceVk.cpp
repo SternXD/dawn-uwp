@@ -69,6 +69,7 @@
 #include "src/dawn/native/vulkan/VulkanError.h"
 #include "src/utils/log.h"
 #include "src/utils/non_copyable.h"
+#include "src/utils/numeric.h"
 #include "src/utils/platform.h"
 
 namespace dawn::native::vulkan {
@@ -521,6 +522,19 @@ ResultOrError<VulkanDeviceKnobs> Device::CreateDevice(VkPhysicalDevice vkPhysica
         featuresChain.Add(&usedKnobs.subgroupSizeControlFeatures);
     }
 
+    if (mDeviceInfo.HasExt(DeviceExt::MaximalReconvergence)) {
+        DAWN_ASSERT(usedKnobs.HasExt(DeviceExt::MaximalReconvergence));
+        usedKnobs.shaderMaximalReconvergenceFeatures =
+            mDeviceInfo.shaderMaximalReconvergenceFeatures;
+        featuresChain.Add(&usedKnobs.shaderMaximalReconvergenceFeatures);
+    }
+    if (mDeviceInfo.HasExt(DeviceExt::SubgroupUniformControlFlow)) {
+        DAWN_ASSERT(usedKnobs.HasExt(DeviceExt::SubgroupUniformControlFlow));
+        usedKnobs.shaderSubgroupUniformControlFlowFeatures =
+            mDeviceInfo.shaderSubgroupUniformControlFlowFeatures;
+        featuresChain.Add(&usedKnobs.shaderSubgroupUniformControlFlowFeatures);
+    }
+
     if (mDeviceInfo.HasExt(DeviceExt::ZeroInitializeWorkgroupMemory)) {
         DAWN_ASSERT(usedKnobs.HasExt(DeviceExt::ZeroInitializeWorkgroupMemory));
 
@@ -586,6 +600,11 @@ ResultOrError<VulkanDeviceKnobs> Device::CreateDevice(VkPhysicalDevice vkPhysica
     if (HasFeature(Feature::PrimitiveIndex)) {
         DAWN_CHECK(mDeviceInfo.features.geometryShader == VK_TRUE);
         usedKnobs.features.geometryShader = VK_TRUE;
+    }
+
+    if (HasFeature(Feature::IndirectFirstInstance)) {
+        DAWN_CHECK(mDeviceInfo.features.drawIndirectFirstInstance == VK_TRUE);
+        usedKnobs.features.drawIndirectFirstInstance = VK_TRUE;
     }
 
     bool shaderFloat16Int8FeaturesAdded = false;
@@ -713,18 +732,20 @@ ResultOrError<VulkanDeviceKnobs> Device::CreateDevice(VkPhysicalDevice vkPhysica
     {
         // Note that GRAPHICS and COMPUTE imply TRANSFER so we don't need to check for it.
         constexpr uint32_t kUniversalFlags = VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT;
-        int universalQueueFamily = -1;
-        for (unsigned int i = 0; i < mDeviceInfo.queueFamilies.size(); ++i) {
+        bool foundQueueFamily = false;
+        uint32_t universalQueueFamily = 0;
+        for (uint32_t i = 0; i < mDeviceInfo.queueFamilies.size(); ++i) {
             if ((mDeviceInfo.queueFamilies[i].queueFlags & kUniversalFlags) == kUniversalFlags) {
                 universalQueueFamily = i;
+                foundQueueFamily = true;
                 break;
             }
         }
 
-        if (universalQueueFamily == -1) {
+        if (!foundQueueFamily) {
             return DAWN_INTERNAL_ERROR("No universal queue family");
         }
-        mMainQueueFamily = static_cast<uint32_t>(universalQueueFamily);
+        mMainQueueFamily = universalQueueFamily;
     }
 
     // Choose to create a single universal queue
@@ -883,7 +904,7 @@ MaybeError Device::ImportExternalImage(const ExternalImageDescriptorVk* descript
         // Therefore, on success, because ImportSemaphore has dup'ed the handle,
         // we need to close the old handle by acquiring and dropping it.
         // TODO(dawn:1745): This entire code path will be deprecated and removed.
-        utils::SystemHandle::Acquire(handle);
+        SystemHandle::Acquire(handle);
         outWaitSemaphores->push_back(semaphore);
     }
 
@@ -1168,7 +1189,7 @@ MaybeError Device::GetAHardwareBufferPropertiesImpl(void* handle,
 }
 
 uint32_t Device::GetOptimalBytesPerRowAlignment() const {
-    return mDeviceInfo.properties.limits.optimalBufferCopyRowPitchAlignment;
+    return checked_cast<uint32_t>(mDeviceInfo.properties.limits.optimalBufferCopyRowPitchAlignment);
 }
 
 uint64_t Device::GetOptimalBufferToTextureCopyOffsetAlignment() const {

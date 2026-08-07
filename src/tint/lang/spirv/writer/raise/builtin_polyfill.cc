@@ -449,8 +449,9 @@ struct State {
         auto* result_ty = builtin->Result()->Type();
 
         auto* pointer = builtin->Args()[0];
+        auto addrspace = pointer->Type()->As<core::type::Pointer>()->AddressSpace();
         auto* memory = [&]() -> core::ir::Value* {
-            switch (pointer->Type()->As<core::type::Pointer>()->AddressSpace()) {
+            switch (addrspace) {
                 case core::AddressSpace::kWorkgroup:
                     return b.Constant(u32(SpvScopeWorkgroup));
                 case core::AddressSpace::kStorage:
@@ -539,8 +540,15 @@ struct State {
                 call->Result()->SetType(ty.u64());
                 break;
             case core::BuiltinFn::kAtomicStore:
-                call = build(spirv::BuiltinFn::kAtomicStore);
-                call->AppendArg(builtin->Args()[1]);
+                if (addrspace == core::AddressSpace::kWorkgroup &&
+                    config.replace_workgroup_atomic_store_with_exchange) {
+                    call = build(spirv::BuiltinFn::kAtomicExchange);
+                    call->AppendArg(builtin->Args()[1]);
+                    call->SetResult(b.InstructionResult(builtin->Args()[1]->Type()));
+                } else {
+                    call = build(spirv::BuiltinFn::kAtomicStore);
+                    call->AppendArg(builtin->Args()[1]);
+                }
                 break;
             case core::BuiltinFn::kAtomicSub:
                 call = build(spirv::BuiltinFn::kAtomicISub);
@@ -1378,15 +1386,19 @@ struct State {
             // in WGSL they both mean the number of elements. When the subgroup matrix element type
             // is `i8` or `u8`, and the input array type is `i32` or `u32`, we need to convert the
             // `stride` and `offset` in WGSL into the ones in SPIR-V by dividing them with 4.
+            // Note: the majorness templated variants match SPIR-V
             auto* applied_stride = stride;
             auto* applied_offset = offset;
-            if (result_ty->Type()->Size() == 1u && arr->ElemType()->Size() == 4u) {
+            if (!majorness_template && result_ty->Type()->Size() == 1u &&
+                arr->ElemType()->Size() == 4u) {
                 if (!config.cooperative_matrix_stride_is_matrix_elements) {
+                    stride = b.InsertBitcastIfNeeded(ty.u32(), stride);
                     auto* applied_stride_binary =
                         b.Binary(core::BinaryOp::kDivide, stride->Type(), stride, u32(4));
                     applied_stride = applied_stride_binary->Result();
                 }
 
+                offset = b.InsertBitcastIfNeeded(ty.u32(), offset);
                 auto* applied_offset_binary =
                     b.Binary(core::BinaryOp::kDivide, offset->Type(), offset, u32(4));
                 applied_offset = applied_offset_binary->Result();
@@ -1434,15 +1446,19 @@ struct State {
             // in WGSL they both mean the number of elements. When the subgroup matrix element type
             // is `i8` or `u8`, and the input array type is `i32` or `u32`, we need to convert the
             // `stride` and `offset` in WGSL into the ones in SPIR-V by dividing them with 4.
+            // Note: the majorness templated variants match SPIR-V
             auto* applied_stride = stride;
             auto* applied_offset = offset;
-            if (value_type->Type()->Size() == 1u && arr->ElemType()->Size() == 4u) {
+            if (!majorness_template && value_type->Type()->Size() == 1u &&
+                arr->ElemType()->Size() == 4u) {
                 if (!config.cooperative_matrix_stride_is_matrix_elements) {
+                    stride = b.InsertBitcastIfNeeded(ty.u32(), stride);
                     auto* applied_stride_binary =
                         b.Binary(core::BinaryOp::kDivide, stride->Type(), stride, u32(4));
                     applied_stride = applied_stride_binary->Result();
                 }
 
+                offset = b.InsertBitcastIfNeeded(ty.u32(), offset);
                 auto* applied_offset_binary =
                     b.Binary(core::BinaryOp::kDivide, offset->Type(), offset, u32(4));
                 applied_offset = applied_offset_binary->Result();
@@ -1564,14 +1580,11 @@ struct State {
 }  // namespace
 
 Result<SuccessType> BuiltinPolyfill(core::ir::Module& ir, PolyfillConfig config) {
-    AssertValid(ir,
-                core::ir::Capabilities{
-                    core::ir::Capability::kAllow8BitIntegers,
-                },
-                "before spirv.BuiltinPolyfill");
+    AssertValid(ir, "before spirv.BuiltinPolyfill");
 
     State{ir, config}.Process();
 
+    ir.properties.Add(core::ir::Property::kAllow8BitIntegers);
     ir.properties.Add(core::ir::Property::kAllowNonCoreTypes);
 
     return Success;

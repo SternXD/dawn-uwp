@@ -25,6 +25,8 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+#include "src/utils/span.h"
+
 #ifdef UNSAFE_BUFFERS_BUILD
 // TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
 #pragma allow_unsafe_buffers
@@ -140,7 +142,7 @@ TEST_P(QueueWriteBufferTests, ManyWriteBuffer) {
     // this test to take forever. Skip it when VVLs are enabled.
     DAWN_SUPPRESS_TEST_IF(IsVulkan() && IsBackendValidationEnabled());
 
-    constexpr uint64_t kSize = 4000 * 1000;
+    constexpr uint64_t kSize = 4000ULL * 1000;
     constexpr uint32_t kElements = 250 * 250;
     wgpu::BufferDescriptor descriptor;
     descriptor.size = kSize;
@@ -158,7 +160,7 @@ TEST_P(QueueWriteBufferTests, ManyWriteBuffer) {
 
 // Test using WriteBuffer for lots of data
 TEST_P(QueueWriteBufferTests, LargeWriteBuffer) {
-    constexpr uint64_t kSize = 4000 * 1000;
+    constexpr uint64_t kSize = 4000ULL * 1000;
     constexpr uint32_t kElements = 1000 * 1000;
     wgpu::BufferDescriptor descriptor;
     descriptor.size = kSize;
@@ -177,8 +179,8 @@ TEST_P(QueueWriteBufferTests, LargeWriteBuffer) {
 
 // Test using WriteBuffer for super large data block
 TEST_P(QueueWriteBufferTests, SuperLargeWriteBuffer) {
-    constexpr uint64_t kSize = 12000 * 1000;
-    constexpr uint64_t kElements = 3000 * 1000;
+    constexpr uint64_t kSize = 12000ULL * 1000;
+    constexpr uint64_t kElements = 3000ULL * 1000;
     wgpu::BufferDescriptor descriptor;
     descriptor.size = kSize;
     descriptor.usage = wgpu::BufferUsage::CopySrc | wgpu::BufferUsage::CopyDst;
@@ -320,8 +322,8 @@ void PackTextureData(const uint8_t* srcData,
     }
 }
 
-void FillData(uint8_t* data, size_t count) {
-    for (size_t i = 0; i < count; ++i) {
+void FillData(Span<uint8_t> data) {
+    for (size_t i = 0; i < data.size(); ++i) {
         data[i] = static_cast<uint8_t>(i % 253);
     }
 }
@@ -354,7 +356,7 @@ class QueueWriteTextureTests : public DawnTestWithParams<WriteTextureFormatParam
                     wgpu::TextureViewDimension::Undefined) {
         // Create data of size `size` and populate it
         std::vector<uint8_t> data(dataSpec.size);
-        FillData(data.data(), data.size());
+        FillData(data);
 
         // Create a texture that is `width` x `height` with (`level` + 1) mip levels.
         wgpu::TextureDescriptor descriptor = {};
@@ -546,6 +548,9 @@ TEST_P(QueueWriteTextureTests, VaryingArrayWriteSize) {
 
 // Test writing to varying mips
 TEST_P(QueueWriteTextureTests, TextureWriteToMip) {
+    // TODO(crbug.com/540087398): NPOT mipmapped depth/stencil textures disallowed due to driver bug
+    DAWN_SUPPRESS_TEST_IF(IsImgTec());
+
     constexpr uint32_t kWidth = 259;
     constexpr uint32_t kHeight = 127;
 
@@ -823,7 +828,7 @@ class QueueWriteTextureSimpleTests : public DawnTest {
         constexpr wgpu::TextureFormat kFormat = wgpu::TextureFormat::RGBA8Unorm;
         constexpr uint32_t kPixelSize = 4;
 
-        std::vector<uint32_t> data(width * height);
+        std::vector<uint32_t> data(static_cast<size_t>(width) * height);
         for (size_t i = 0; i < data.size(); i++) {
             data[i] = 0xFFFFFFFF;
         }
@@ -840,8 +845,8 @@ class QueueWriteTextureSimpleTests : public DawnTest {
             utils::CreateTexelCopyBufferLayout(0, width * kPixelSize);
         wgpu::Extent3D copyExtent = {width, height, 1};
         device.GetQueue().WriteTexture(&texelCopyTextureInfo, data.data(),
-                                       width * height * kPixelSize, &texelCopyBufferLayout,
-                                       &copyExtent);
+                                       static_cast<size_t>(width) * height * kPixelSize,
+                                       &texelCopyBufferLayout, &copyExtent);
 
         EXPECT_TEXTURE_EQ(data.data(), texture, {0, 0}, {width, height});
     }

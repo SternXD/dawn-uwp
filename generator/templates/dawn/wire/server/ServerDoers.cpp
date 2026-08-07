@@ -36,20 +36,31 @@ namespace dawn::wire::server {
         {% set is_method = method is not none %}
 
         {% set Suffix = command.name.CamelCase() %}
+        {% set CmdName = Suffix + "Cmd" %}
+        {% set spanify = CmdName not in cmd_spanification_blocklist %}
         {% if Suffix not in client_side_commands %}
             {% if is_method %}
                 WireResult Server::Do{{Suffix}}(
-                    {%- for member in command.members -%}
+                    {%- for member in command.members if (not spanify or not member.is_length) -%}
+                        {%- if not loop.first -%}, {% endif %}
                         {%- if member.is_return_value -%}
                             {%- if member.handle_type -%}
                                 {{as_cType(member.handle_type.name)}}* {{as_varName(member.name)}}
                             {%- else -%}
                                 {{as_cType(member.type.name)}}* {{as_varName(member.name)}}
                             {%- endif -%}
+                        {%- elif spanify and member.length and member.length != "constant" -%}
+                            //* TODO(https://crbug.com/524405497): Support fixed-length spans.
+                            {% set element_type = "std::remove_pointer_t<" + decorate(as_cType(member.type.name, spanify), member) + ">" %}
+                            {% if is_wire_data_only(member) %}
+                                //* If the member is data only, we do not copy the data, so it will be volatile.
+                                {% set element_type = "volatile " + element_type %}
+                            {% endif %}
+                            {% set index_type = member.length.type.name.canonical_case() %}
+                            ityp::span<{{index_type}}, {{element_type}}> {{as_varName(member.name)}}
                         {%- else -%}
                             {{as_annotated_cType(member)}}
                         {%- endif -%}
-                        {%- if not loop.last -%}, {% endif %}
                     {%- endfor -%}
                 ) {
                     {% set ret = command.members|selectattr("is_return_value")|list %}
@@ -65,8 +76,21 @@ namespace dawn::wire::server {
                     {% endif %}
                     mProcs->{{as_varName(type.name, method.name)}}(
                         {%- for member in command.members if not member.is_return_value -%}
-                            {{as_varName(member.name)}}
-                            {%- if not loop.last -%}, {% endif %}
+                            {%- if not loop.first -%}, {% endif %}
+                            {%- if spanify and member.is_length -%}
+                                {%- set span_members = command.members | selectattr("length", "equalto", member) | list -%}
+                                {{as_varName(span_members[0].name)}}.size()
+                            {%- elif spanify and member.length and member.length != "constant" -%}
+                                {% if is_wire_data_only(member) %}
+                                    //* For wire data types, we cast away the volatile here. This
+                                    //* is fine since the data is not sensitive to TOCTOU attacks.
+                                    const_cast<const std::byte*>({{as_varName(member.name)}}.data())
+                                {%- else -%}
+                                    {{as_varName(member.name)}}.data()
+                                {%- endif -%}
+                            {%- else -%}
+                                {{as_varName(member.name)}}
+                            {%- endif -%}
                         {%- endfor -%}
                     );
                     {% if ret|length == 1 %}

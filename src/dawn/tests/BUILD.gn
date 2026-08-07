@@ -178,6 +178,7 @@ source_set("native_mocks_sources") {
   deps = [
     ":test_infra_sources",
     "${dawn_root}/src/dawn:proc",
+    "${dawn_root}/src/dawn/common",
     "${dawn_root}/src/dawn/native:sources",
     "${dawn_root}/src/dawn/native:static",
     "${dawn_root}/src/utils:gmock_and_gtest",
@@ -283,12 +284,12 @@ dawn_test("dawn_unittests") {
     "unittests/GetProcAddressTests.cpp",
     "unittests/ITypArrayTests.cpp",
     "unittests/ITypBitsetTests.cpp",
-    "unittests/ITypSpanTests.cpp",
     "unittests/ITypStackVecTests.cpp",
     "unittests/ITypVectorTests.cpp",
     "unittests/LRUCacheTests.cpp",
     "unittests/LinkedListTests.cpp",
     "unittests/MathTests.cpp",
+    "unittests/MemoryBlockAllocatorTests.cpp",
     "unittests/MutexProtectedTests.cpp",
     "unittests/MutexTests.cpp",
     "unittests/NumericTests.cpp",
@@ -323,6 +324,7 @@ dawn_test("dawn_unittests") {
     "unittests/native/DestroyObjectTests.cpp",
     "unittests/native/DeviceAsyncTaskTests.cpp",
     "unittests/native/DeviceCreationTests.cpp",
+    "unittests/native/DeviceMutexTests.cpp",
     "unittests/native/ErrorMonadTests.cpp",
     "unittests/native/ImmediatesTrackerTests.cpp",
     "unittests/native/LimitsTests.cpp",
@@ -453,6 +455,7 @@ dawn_test("dawn_unittests") {
 source_set("partition_alloc_support") {
   testonly = true
 
+  public_deps = [ "${dawn_abseil_dir}:absl" ]
   deps = [ "${dawn_root}/src/dawn/common" ]
   public = [ "PartitionAllocSupport.h" ]
   sources = [ "PartitionAllocSupport.cpp" ]
@@ -884,9 +887,10 @@ source_set("white_box_tests_sources") {
     defines += [ "DAWN_ANGLE_LIBS_SUFFIX=\"${angle_libs_suffix}\"" ]
     sources += [
       "white_box/EGLImageWrappingTests.cpp",
+      "white_box/GLFramebufferCompletenessTests.cpp",
       "white_box/GLTextureWrappingTests.cpp",
     ]
-    include_dirs = [ "//third_party/EGL-Registry" ]
+    include_dirs = [ "${dawn_root}/third_party/EGL-Registry" ]
   }
 }
 

@@ -29,6 +29,7 @@
 #include <limits>
 #include <vector>
 
+#include "src/dawn/common/Math.h"
 #include "src/dawn/tests/DawnTest.h"
 #include "src/dawn/utils/ComboRenderPipelineDescriptor.h"
 #include "src/dawn/utils/WGPUHelpers.h"
@@ -992,6 +993,58 @@ TEST_P(ImmediateDataTests, AutoCalculatedPipelineLayoutImmediateSize) {
     EXPECT_BUFFER_U32_RANGE_EQ(expected.data(), mStorageBuffer, 0, expected.size());
 }
 
+// A compute entry point that uses a vec3u user immediate (12 bytes, not a multiple of 16) together
+// with @builtin(num_workgroups). The user immediate block precedes num_workgroups in the internal
+// immediate layout, so the 12-byte user block pushes num_workgroups onto a 4-aligned, non-16-byte
+// offset. Both the user immediate and num_workgroups must read back correctly.
+TEST_P(ImmediateDataTests, ComputeVec3UserImmediateWithNumWorkgroups) {
+    wgpu::ShaderModule module = utils::CreateShaderModule(device, R"(
+        var<immediate> userImm : vec3u;
+        struct Output {
+            userImm : vec3u,
+            numWorkgroups : vec3u,
+        };
+        @group(0) @binding(0) var<storage, read_write> output : Output;
+
+        @compute @workgroup_size(1, 1, 1) fn csMain(@builtin(num_workgroups) n : vec3u) {
+            output.userImm = userImm;
+            output.numWorkgroups = n;
+        }
+    )");
+
+    wgpu::ComputePipelineDescriptor desc;
+    desc.compute.module = module;
+    wgpu::ComputePipeline pipeline = device.CreateComputePipeline(&desc);
+
+    wgpu::BufferDescriptor bufferDesc;
+    bufferDesc.size = sizeof(uint32_t) * 8;
+    bufferDesc.usage = wgpu::BufferUsage::CopySrc | wgpu::BufferUsage::Storage;
+    wgpu::Buffer output = device.CreateBuffer(&bufferDesc);
+    wgpu::BindGroup bg =
+        utils::MakeBindGroup(device, pipeline.GetBindGroupLayout(0), {{0, output}});
+
+    std::array<uint32_t, 3> userImm = {11, 22, 33};
+    constexpr uint32_t kX = 2, kY = 3, kZ = 4;
+
+    wgpu::CommandEncoder enc = device.CreateCommandEncoder();
+    wgpu::ComputePassEncoder pass = enc.BeginComputePass();
+    pass.SetPipeline(pipeline);
+    pass.SetBindGroup(0, bg);
+    pass.SetImmediates(0, userImm.data(), userImm.size() * sizeof(uint32_t));
+    pass.DispatchWorkgroups(kX, kY, kZ);
+    pass.End();
+    wgpu::CommandBuffer commands = enc.Finish();
+    queue.Submit(1, &commands);
+
+    // The Output struct places userImm at byte offset 0 and numWorkgroups at byte offset 16 (vec3u
+    // members are 16-byte aligned in std430). The EXPECT_BUFFER offset argument is in bytes.
+    std::array<uint32_t, 3> expectedUserImm = {11, 22, 33};
+    std::array<uint32_t, 3> expectedNumWorkgroups = {kX, kY, kZ};
+    EXPECT_BUFFER_U32_RANGE_EQ(expectedUserImm.data(), output, 0, expectedUserImm.size());
+    EXPECT_BUFFER_U32_RANGE_EQ(expectedNumWorkgroups.data(), output, 16,
+                               expectedNumWorkgroups.size());
+}
+
 DAWN_INSTANTIATE_TEST(ImmediateDataTests,
                       D3D11Backend(),
                       D3D12Backend(),
@@ -999,6 +1052,89 @@ DAWN_INSTANTIATE_TEST(ImmediateDataTests,
                       OpenGLESBackend(),
                       VulkanBackend(),
                       WebGPUBackend());
+
+// f16 immediates are tested in their own suite so it can require the shader-f16 feature and be
+// instantiated only on backends that can enable it (on D3D12 that means DXC).
+class ImmediateDataF16Tests : public DawnTest {
+  protected:
+    std::vector<wgpu::FeatureName> GetRequiredFeatures() override {
+        if (SupportsFeatures({wgpu::FeatureName::ShaderF16})) {
+            return {wgpu::FeatureName::ShaderF16};
+        }
+        return {};
+    }
+
+    void SetUp() override {
+        DawnTest::SetUp();
+        // GetRequiredFeatures only requests shader-f16 when the adapter advertises it, but the
+        // device can still be created without it: on D3D12 the adapter reports support even when
+        // the pipeline uses FXC, while enabling the feature requires DXC, so device creation drops
+        // it. Skip when the feature did not make it onto the device. This runs per test because
+        // DawnTest recreates the device for each test case.
+        DAWN_TEST_UNSUPPORTED_IF(!device.HasFeature(wgpu::FeatureName::ShaderF16));
+    }
+};
+
+// Authoritative check that Tint's f16 immediate member byte offsets agree with the bytes Dawn
+// uploads via SetImmediates. Three f16 members sit at byte offsets 0/2/4, so the last of the two
+// uint32_t slots is only partially used, exercising the padded-tail case.
+TEST_P(ImmediateDataF16Tests, Vec3) {
+    wgpu::ShaderModule module = utils::CreateShaderModule(device, R"(
+        enable f16;
+        struct Immediate {
+            a: f16,
+            b: f16,
+            c: f16,
+        };
+        var<immediate> imm: Immediate;
+        @group(0) @binding(0) var<storage, read_write> output : vec3f;
+
+        @compute @workgroup_size(1, 1, 1)
+        fn csMain() {
+            output = vec3f(f32(imm.a), f32(imm.b), f32(imm.c));
+        })");
+
+    wgpu::BufferDescriptor bufferDesc;
+    bufferDesc.size = sizeof(float) * 3;
+    bufferDesc.usage = wgpu::BufferUsage::CopySrc | wgpu::BufferUsage::Storage;
+    wgpu::Buffer storageBuffer = device.CreateBuffer(&bufferDesc);
+
+    wgpu::ComputePipelineDescriptor csDesc;
+    csDesc.compute.module = module;
+    wgpu::ComputePipeline pipeline = device.CreateComputePipeline(&csDesc);
+
+    wgpu::BindGroup bindGroup =
+        utils::MakeBindGroup(device, pipeline.GetBindGroupLayout(0), {{0, storageBuffer}});
+
+    // These values are exactly representable in f16 but carry dense mantissa bits and mixed signs,
+    // so they catch bit-level packing errors as well as offset/stride/ordering errors. Packed
+    // contiguously, the three uint16_t values occupy byte offsets 0/2/4 -- matching the WGSL struct
+    // member offsets.
+    std::array<float, 3> values = {1.5f, -2.25f, 3.75f};
+    std::array<uint16_t, 4> packed = {
+        Float32ToFloat16(values[0]),
+        Float32ToFloat16(values[1]),
+        Float32ToFloat16(values[2]),
+        0,
+    };
+
+    wgpu::CommandEncoder commandEncoder = device.CreateCommandEncoder();
+    wgpu::ComputePassEncoder computePassEncoder = commandEncoder.BeginComputePass();
+    computePassEncoder.SetPipeline(pipeline);
+    computePassEncoder.SetImmediates(0, packed.data(), packed.size() * sizeof(uint16_t));
+    computePassEncoder.SetBindGroup(0, bindGroup);
+    computePassEncoder.DispatchWorkgroups(1);
+    computePassEncoder.End();
+    wgpu::CommandBuffer commands = commandEncoder.Finish();
+    queue.Submit(1, &commands);
+
+    EXPECT_BUFFER_FLOAT_RANGE_EQ(values.data(), storageBuffer, 0, values.size());
+}
+
+DAWN_INSTANTIATE_TEST(ImmediateDataF16Tests,
+                      D3D12Backend({"use_dxc"}),
+                      MetalBackend(),
+                      VulkanBackend());
 
 class ImmediateDataWithResourceTableTests : public DawnTest {
   protected:

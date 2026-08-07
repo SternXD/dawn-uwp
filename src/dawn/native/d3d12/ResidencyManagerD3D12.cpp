@@ -154,9 +154,10 @@ void ResidencyManager::UpdateMemorySegmentInfo(MemorySegmentInfo* segmentInfo) {
     // decreases fluctuations in the operating-system-defined budget, which improves stability
     // for both Dawn and other applications on the system. Note the value of 95% is arbitrarily
     // chosen and subject to future experimentation.
-    static constexpr float kBudgetCap = 0.95f;
+    static constexpr double kBudgetCap = 0.95;
     segmentInfo->budget = static_cast<uint64_t>(
-        (queryVideoMemoryInfo.Budget - segmentInfo->externalReservation) * kBudgetCap);
+        static_cast<double>(queryVideoMemoryInfo.Budget - segmentInfo->externalReservation) *
+        kBudgetCap);
 }
 
 // Removes a heap from the LRU and returns the least recently used heap when possible. Returns
@@ -247,7 +248,7 @@ ResultOrError<uint64_t> ResidencyManager::EnsureCanMakeResident(uint64_t sizeToM
 // Given a list of heaps that are pending usage, this function will estimate memory needed,
 // evict resources until enough space is available, then make resident any heaps scheduled for
 // usage.
-MaybeError ResidencyManager::EnsureHeapsAreResident(Heap** heaps, size_t heapCount) {
+MaybeError ResidencyManager::EnsureHeapsAreResident(Span<Heap* const> heaps) {
     if (!mResidencyManagementEnabled) {
         return {};
     }
@@ -258,9 +259,7 @@ MaybeError ResidencyManager::EnsureHeapsAreResident(Heap** heaps, size_t heapCou
     uint64_t nonLocalSizeToMakeResident = 0;
 
     ExecutionSerial pendingCommandSerial = mDevice->GetQueue()->GetPendingCommandSerial();
-    for (size_t i = 0; i < heapCount; i++) {
-        Heap* heap = DAWN_UNSAFE_TODO(heaps[i]);
-
+    for (Heap* heap : heaps) {
         // Heaps that are locked resident are not tracked in the LRU cache.
         if (heap->IsResidencyLocked()) {
             continue;

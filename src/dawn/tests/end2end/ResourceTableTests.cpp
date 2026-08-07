@@ -31,6 +31,7 @@
 #include <variant>
 #include <vector>
 
+#include "absl/strings/str_format.h"
 #include "src/dawn/common/Enumerator.h"
 #include "src/dawn/common/Range.h"
 #include "src/dawn/tests/DawnTest.h"
@@ -38,6 +39,7 @@
 #include "src/dawn/utils/ComboRenderPipelineDescriptor.h"
 #include "src/dawn/utils/ScopedIgnoreValidationErrors.h"
 #include "src/dawn/utils/WGPUHelpers.h"
+#include "src/utils/numeric.h"
 
 namespace dawn {
 namespace {
@@ -83,6 +85,25 @@ class ResourceTableTests : public DawnTest {
         return table;
     }
 
+    wgpu::TextureView CreateViewForTable(const wgpu::Texture& tex) {
+        wgpu::TextureViewDescriptor desc;
+        desc.usage = wgpu::TextureUsage::TextureBinding;
+        return tex.CreateView(&desc);
+    }
+
+    std::vector<wgpu::BindGroupEntry> MakeBindGroupEntries(
+        std::vector<std::pair<uint32_t, wgpu::BindingResource>> resources) {
+        std::vector<wgpu::BindGroupEntry> entries;
+        for (auto& r : resources) {
+            wgpu::BindGroupEntry entry;
+            entry.binding = r.first;
+            DAWN_ASSERT(r.second.textureView);
+            entry.textureView = r.second.textureView;
+            entries.push_back(entry);
+        }
+        return entries;
+    }
+
     wgpu::PipelineLayout MakePipelineLayoutWithTable(std::vector<wgpu::BindGroupLayout> bgls = {},
                                                      uint32_t immediateSize = 0) {
         wgpu::PipelineLayoutResourceTable plTable;
@@ -98,24 +119,49 @@ class ResourceTableTests : public DawnTest {
         return device.CreatePipelineLayout(&desc);
     }
 
-    // Test that the `table`, has resources of `wgslType` in the `expected` slots.
+    // Test that the `table` has resources of `wgslType` in the `expected` slots.
+    // If provided, creates a bind group 1 with 'bindGroupEntries' with resources of type
+    // `bindGroupWgslType`.
     void TestHasResource(wgpu::ResourceTable table,
                          std::vector<bool> expected,
-                         std::string wgslType = "texture_2d<f32>") {
+                         std::string wgslType = "texture_2d<f32>",
+                         std::vector<wgpu::BindGroupEntry> bindGroupEntries = {},
+                         std::string bindGroupWgslType = "texture_2d<f32>") {
         ASSERT_EQ(table.GetSize(), expected.size());
 
-        // Create the test pipeline.
-        wgpu::ShaderModule module = utils::CreateShaderModule(device, R"(
+        std::string shader = R"(
             enable chromium_experimental_resource_table;
 
             @group(0) @binding(0) var<storage, read_write> results : array<u32>;
             var<immediate> resourceCount : u32;
             @compute @workgroup_size(1) fn main() {
                 for (var i = 0u; i < resourceCount; i++) {
-                    results[i] = u32(hasResource<)" + wgslType + R"(>(i));
+                    results[i] = u32(hasResource<)" +
+                             wgslType + R"(>(i));
                 }
+
+                referenceTextures();
             }
-        )");
+        )";
+
+        // If provided, add bindings in group(1)
+        if (!bindGroupEntries.empty()) {
+            for (auto entry : bindGroupEntries) {
+                shader += absl::StrFormat("@group(1) @binding(%1$u) var tex%1$u : %2$s;\n",
+                                          entry.binding, bindGroupWgslType);
+            }
+            shader += "fn referenceTextures() {\n";
+            for (auto entry : bindGroupEntries) {
+                shader +=
+                    absl::StrFormat("let d%1$u = textureDimensions(tex%1$u);\n", entry.binding);
+            }
+            shader += "}\n";
+        } else {
+            shader += "fn referenceTextures() {}\n";
+        }
+
+        // Create the test pipeline.
+        wgpu::ShaderModule module = utils::CreateShaderModule(device, shader);
         wgpu::ComputePipelineDescriptor csDesc = {.compute = {
                                                       .module = module,
                                                   }};
@@ -131,12 +177,24 @@ class ResourceTableTests : public DawnTest {
             utils::MakeBindGroup(device, testPipeline.GetBindGroupLayout(0), {{0, resultBuffer}});
         uint32_t resourceCount = table.GetSize();
 
+        wgpu::BindGroup bindGroupToHideSlots;
+        if (!bindGroupEntries.empty()) {
+            wgpu::BindGroupDescriptor descriptor;
+            descriptor.layout = testPipeline.GetBindGroupLayout(1);
+            descriptor.entryCount = checked_cast<uint32_t>(bindGroupEntries.size());
+            descriptor.entries = bindGroupEntries.data();
+            bindGroupToHideSlots = device.CreateBindGroup(&descriptor);
+        }
+
         // Run the test.
         wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
         wgpu::ComputePassEncoder pass = encoder.BeginComputePass();
         pass.SetResourceTable(table);
         pass.SetImmediates(0, &resourceCount, sizeof(resourceCount));
         pass.SetBindGroup(0, resultBG);
+        if (bindGroupToHideSlots) {
+            pass.SetBindGroup(1, bindGroupToHideSlots);
+        }
         pass.SetPipeline(testPipeline);
         pass.DispatchWorkgroups(1);
         pass.End();
@@ -169,7 +227,7 @@ class ResourceTableTests : public DawnTest {
         queue.Submit(1, &commands);
     }
 
-    wgpu::TextureView MakePinnedU8View(uint8_t value) {
+    wgpu::TextureView MakeU8View(uint8_t value) {
         // Create the texture.
         wgpu::TextureDescriptor tDesc{
             .usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst,
@@ -184,8 +242,7 @@ class ResourceTableTests : public DawnTest {
         wgpu::Extent3D copySize = {1, 1, 1};
         queue.WriteTexture(&srcInfo, &value, 1, &dstInfo, &copySize);
 
-        // Return a view to the pinned texture.
-        tex.Pin(wgpu::TextureUsage::TextureBinding);
+        // Return a view to the texture.
         return tex.CreateView();
     }
 
@@ -417,7 +474,7 @@ class ResourceTableTests : public DawnTest {
         auto texture = device.CreateTexture(&descriptor);
 
         const uint32_t rowPixels = kTextureBytesPerRowAlignment / sizeof(utils::RGBA8);
-        std::array<utils::RGBA8, rowPixels * 2> pixels;
+        std::array<utils::RGBA8, static_cast<size_t>(rowPixels) * 2> pixels;
         pixels[0] = pixels[rowPixels + 1] = utils::RGBA8::kRed;
         pixels[1] = pixels[rowPixels] = utils::RGBA8::kGreen;
 
@@ -544,51 +601,28 @@ TEST_P(ResourceTableTests, RecyclingDoesntReuseTooSmallAllocation) {
     }
 }
 
-// Tests that pinning / unpinning doesn't crash in backends.
-TEST_P(ResourceTableTests, PinningBalancedInBackends) {
-    wgpu::TextureDescriptor tDesc{
-        .usage = wgpu::TextureUsage::TextureBinding,
-        .size = {1, 1},
-        .format = wgpu::TextureFormat::R16Float,
-    };
-    wgpu::Texture tex = device.CreateTexture(&tDesc);
-
-    // Frontend should skip that unpinning as the texture is not pinned.
-    tex.Unpin();
-
-    // Duplicate pinning should be skipped by the frontend.
-    tex.Pin(wgpu::TextureUsage::TextureBinding);
-    tex.Pin(wgpu::TextureUsage::TextureBinding);
-
-    // Duplicate unpinning should be skipped by the frontend.
-    tex.Unpin();
-    tex.Unpin();
-
-    // Force a queue submit to flush pending commands and potentially find more issues.
-    queue.Submit(0, nullptr);
-}
-
 // Test WGSL `hasResource` reflects the state of the resource table.
-TEST_P(ResourceTableTests, HasResourceOneTexturePinUnpin) {
+TEST_P(ResourceTableTests, HasResourceOneTexture) {
     wgpu::TextureDescriptor tDesc{
-        .usage = wgpu::TextureUsage::TextureBinding,
+        .usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::StorageBinding,
         .size = {1, 1},
-        .format = wgpu::TextureFormat::R8Unorm,
+        .format = wgpu::TextureFormat::RGBA8Unorm,
     };
     wgpu::Texture tex = device.CreateTexture(&tDesc);
 
-    wgpu::ResourceTable table = MakeResourceTable(3, {{1, {.textureView = tex.CreateView()}}});
+    wgpu::ResourceTable table =
+        MakeResourceTable(3, {{1, {.textureView = CreateViewForTable(tex)}}});
+    auto bge = MakeBindGroupEntries({{0, {.textureView = tex.CreateView()}}});
 
-    // Before pinning, the table has no valid entries.
-    TestHasResource(table, {false, false, false});
+    // Table bound textures are visible by default
+    TestHasResource(table, {false, true, false}, "texture_2d<f32>");
 
-    // After pinning it has the one valid entry valid.
-    tex.Pin(wgpu::TextureUsage::TextureBinding);
-    TestHasResource(table, {false, true, false});
+    // If the texture is also in a bind group as writable, it hides the same texture in the table
+    TestHasResource(table, {false, false, false}, "texture_2d<f32>", bge,
+                    "texture_storage_2d<rgba8unorm, write>");
 
-    // After unpinning it has the no more valid entries.
-    tex.Unpin();
-    TestHasResource(table, {false, false, false});
+    // But if it's bound as readonly, it doesn't hide it
+    TestHasResource(table, {false, true, false}, "texture_2d<f32>", bge, "texture_2d<f32>");
 }
 
 // Test WGSL `hasResource` reflects the state of the resource table.
@@ -602,12 +636,12 @@ TEST_P(ResourceTableTests, HasResourceFilterableToUnfilterable) {
 
     wgpu::ResourceTable table = MakeResourceTable(3, {{1, {.textureView = tex.CreateView()}}});
 
-    tex.Pin(wgpu::TextureUsage::TextureBinding);
     TestHasResource(table, {false, true, false}, "texture_2d<f32>");
 }
 
-// Test that calling texture.Destroy() implicitly unpins it.
-TEST_P(ResourceTableTests, HasResourceOneTexturePinDestroy) {
+// Test that calling texture.Destroy() implicitly hides it.
+// Note: Similar tests for EndAccess are implemented in SharedTextureMemoryResourceTableTests.
+TEST_P(ResourceTableTests, HasResourceOneTextureDestroy) {
     wgpu::TextureDescriptor tDesc{
         .usage = wgpu::TextureUsage::TextureBinding,
         .size = {1, 1},
@@ -617,11 +651,7 @@ TEST_P(ResourceTableTests, HasResourceOneTexturePinDestroy) {
 
     wgpu::ResourceTable table = MakeResourceTable(3, {{1, {.textureView = tex.CreateView()}}});
 
-    // Before pinning, the table has no valid entries.
-    TestHasResource(table, {false, false, false});
-
-    // After pinning it has the one valid entry valid.
-    tex.Pin(wgpu::TextureUsage::TextureBinding);
+    // Has one valid entry
     TestHasResource(table, {false, true, false});
 
     // After texture destruction it has the no more valid entries.
@@ -630,33 +660,36 @@ TEST_P(ResourceTableTests, HasResourceOneTexturePinDestroy) {
 }
 
 // Test that a texture used multiple times in the same table has its availability correctly updated.
-TEST_P(ResourceTableTests, HasResourceSameTextureMultipleTimesPinUnpin) {
+TEST_P(ResourceTableTests, HasResourceSameTextureMultipleTimes) {
     wgpu::TextureDescriptor tDesc{
-        .usage = wgpu::TextureUsage::TextureBinding,
+        .usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::StorageBinding,
         .size = {1, 1},
-        .format = wgpu::TextureFormat::R8Unorm,
+        .format = wgpu::TextureFormat::RGBA8Unorm,
     };
     wgpu::Texture tex = device.CreateTexture(&tDesc);
 
-    wgpu::ResourceTable table = MakeResourceTable(4, {
-                                                         {1, {.textureView = tex.CreateView()}},
-                                                         {3, {.textureView = tex.CreateView()}},
-                                                     });
+    wgpu::ResourceTable table =
+        MakeResourceTable(4, {
+                                 {1, {.textureView = CreateViewForTable(tex)}},
+                                 {3, {.textureView = CreateViewForTable(tex)}},
+                             });
 
-    // Before pinning, the table has no valid entries.
-    TestHasResource(table, {false, false, false, false});
+    auto bge = MakeBindGroupEntries({{0, {.textureView = tex.CreateView()}}});
 
-    // After pinning it has valid entries.
-    tex.Pin(wgpu::TextureUsage::TextureBinding);
+    // Table bound textures are visible by default
     TestHasResource(table, {false, true, false, true});
 
-    // After unpinning it has the no more valid entries.
-    tex.Unpin();
-    TestHasResource(table, {false, false, false, false});
+    // If the texture is also in a bind group as writable, it hides the same texture in the table
+    TestHasResource(table, {false, false, false, false}, "texture_2d<f32>", bge,
+                    "texture_storage_2d<rgba8unorm, write>");
+
+    // But if it's bound as readonly, it doesn't hide it
+    TestHasResource(table, {false, true, false, true}, "texture_2d<f32>", bge, "texture_2d<f32>");
 }
 
 // Test that updating a table with an already destroyed texture works, but doesn't show that entry
 // as available.
+// Note: Similar tests for EndAccess are implemented in SharedTextureMemoryResourceTableTests.
 TEST_P(ResourceTableTests, HasResourceUpdateWithTextureAlreadyDestroyed) {
     wgpu::TextureDescriptor tDesc{
         .usage = wgpu::TextureUsage::TextureBinding,
@@ -668,11 +701,11 @@ TEST_P(ResourceTableTests, HasResourceUpdateWithTextureAlreadyDestroyed) {
 
     wgpu::ResourceTable table = MakeResourceTable(1, {{0, {.textureView = tex.CreateView()}}});
 
-    // Before pinning, the table has no valid entries.
     TestHasResource(table, {false});
 }
 
 // Test that a texture used in multiple resource tables has its availability correctly updated.
+// Note: Similar tests for EndAccess are implemented in SharedTextureMemoryResourceTableTests.
 TEST_P(ResourceTableTests, HasResourceSameTextureMultipleTables) {
     wgpu::TextureDescriptor tDesc{
         .usage = wgpu::TextureUsage::TextureBinding,
@@ -684,12 +717,7 @@ TEST_P(ResourceTableTests, HasResourceSameTextureMultipleTables) {
     wgpu::ResourceTable table1 = MakeResourceTable(3, {{1, {.textureView = tex.CreateView()}}});
     wgpu::ResourceTable table2 = MakeResourceTable(1, {{0, {.textureView = tex.CreateView()}}});
 
-    // Before pinning, the tables have no valid entries.
-    TestHasResource(table1, {false, false, false});
-    TestHasResource(table2, {false});
-
-    // After pinning the texture, they have valid entries.
-    tex.Pin(wgpu::TextureUsage::TextureBinding);
+    // Table bound textures are visible by default
     TestHasResource(table1, {false, true, false});
     TestHasResource(table2, {true});
 
@@ -701,32 +729,335 @@ TEST_P(ResourceTableTests, HasResourceSameTextureMultipleTables) {
 // Test that texture availabililty is controlled per-texture.
 TEST_P(ResourceTableTests, HasResourceMultipleTexturesTable) {
     wgpu::TextureDescriptor tDesc{
-        .usage = wgpu::TextureUsage::TextureBinding,
+        .usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::StorageBinding,
         .size = {1, 1},
-        .format = wgpu::TextureFormat::R8Unorm,
+        .format = wgpu::TextureFormat::RGBA8Unorm,
     };
     wgpu::Texture tex0 = device.CreateTexture(&tDesc);
     wgpu::Texture tex1 = device.CreateTexture(&tDesc);
 
-    wgpu::ResourceTable table = MakeResourceTable(2, {
-                                                         {0, {.textureView = tex0.CreateView()}},
-                                                         {1, {.textureView = tex1.CreateView()}},
-                                                     });
+    wgpu::ResourceTable table =
+        MakeResourceTable(2, {
+                                 {0, {.textureView = CreateViewForTable(tex0)}},
+                                 {1, {.textureView = CreateViewForTable(tex1)}},
+                             });
+    auto bge0 = MakeBindGroupEntries({{5, {.textureView = tex0.CreateView()}}});
+    auto bge1 = MakeBindGroupEntries({{6, {.textureView = tex1.CreateView()}}});
+    auto bgeBoth = MakeBindGroupEntries(
+        {{5, {.textureView = tex0.CreateView()}}, {6, {.textureView = tex1.CreateView()}}});
 
-    // Before pinning, the table has no valid entries.
-    TestHasResource(table, {false, false});
+    // Both visible by default
+    TestHasResource(table, {true, true}, "texture_2d<f32>");
 
-    // After pinning tex0 it has one valid entry.
-    tex0.Pin(wgpu::TextureUsage::TextureBinding);
-    TestHasResource(table, {true, false});
+    // Both hidden if both are writable in bindgroup
+    TestHasResource(table, {false, false}, "texture_2d<f32>", bgeBoth,
+                    "texture_storage_2d<rgba8unorm, write>");
 
-    // After pinning tex1 it has two valid entries.
-    tex1.Pin(wgpu::TextureUsage::TextureBinding);
-    TestHasResource(table, {true, true});
+    // First hidden if first is writable in bindgroup
+    TestHasResource(table, {false, true}, "texture_2d<f32>", bge0,
+                    "texture_storage_2d<rgba8unorm, write>");
 
-    // After unpinning tex0 it has only one valid entry.
-    tex0.Unpin();
-    TestHasResource(table, {false, true});
+    // Second hidden if second is writable in bindgroup
+    TestHasResource(table, {true, false}, "texture_2d<f32>", bge1,
+                    "texture_storage_2d<rgba8unorm, write>");
+
+    // Both visible if both are readonly in bindgroup
+    TestHasResource(table, {true, true}, "texture_2d<f32>", bgeBoth, "texture_2d<f32>");
+}
+
+// Test that writing to a texture in a render pass implicitly hides it in the resource table.
+// TODO(crbug.com/522749739): TestHasResource is used to test this with compute shaders. Consider
+// making TestHasResource test both for compute and render passes.
+TEST_P(ResourceTableTests, ImplicitHidingRender) {
+    // TODO(https://issues.chromium.org/issues/530631417): Fails on PowerVR DXT-48-1536
+    DAWN_SUPPRESS_TEST_IF(IsAndroid() && IsImgTec() && IsVulkan());
+
+    wgpu::ShaderModule vsModule = utils::CreateShaderModule(device, R"(
+        @vertex fn main(@builtin(vertex_index) VertexIndex : u32) -> @builtin(position) vec4f {
+            var pos = array<vec2f, 3>(
+                vec2f(-1.0, -1.0),
+                vec2f(3.0, -1.0),
+                vec2f(-1.0, 3.0)
+            );
+            return vec4f(pos[VertexIndex], 0.0, 1.0);
+        }
+    )");
+
+    wgpu::ShaderModule fsModule = utils::CreateShaderModule(device, R"(
+        enable chromium_experimental_resource_table;
+
+        @group(0) @binding(0) var<storage, read_write> results : array<u32>;
+
+        @fragment fn main() -> @location(0) u32 {
+            let hasRead = hasResource<texture_2d<u32>>(0);
+            results[0] = u32(hasRead);
+            return 0u;
+        }
+    )");
+
+    utils::ComboRenderPipelineDescriptor descriptor;
+    descriptor.vertex.module = vsModule;
+    descriptor.cFragment.module = fsModule;
+    descriptor.cFragment.targetCount = 1;
+    descriptor.cTargets[0].format = wgpu::TextureFormat::R32Uint;
+    descriptor.layout = nullptr;
+
+    wgpu::RenderPipeline pipeline = device.CreateRenderPipeline(&descriptor);
+
+    // Create textures.
+    wgpu::TextureDescriptor tDesc{
+        .usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::RenderAttachment |
+                 wgpu::TextureUsage::CopyDst,
+        .size = {1, 1},
+        .format = wgpu::TextureFormat::R32Uint,
+    };
+    wgpu::Texture texA = device.CreateTexture(&tDesc);
+    wgpu::Texture texB = device.CreateTexture(&tDesc);
+
+    // Create result buffer.
+    wgpu::BufferDescriptor bDesc = {
+        .usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopySrc,
+        .size = 1 * sizeof(uint32_t),
+    };
+    wgpu::Buffer resultBuffer = device.CreateBuffer(&bDesc);
+
+    // Create resource table containing texA.
+    wgpu::ResourceTable table =
+        MakeResourceTable(1, {{0, {.textureView = CreateViewForTable(texA)}}});
+
+    auto draw = [&](wgpu::Texture writeToTexture, bool expectHasResource) {
+        wgpu::BindGroup bg = utils::MakeBindGroup(device, pipeline.GetBindGroupLayout(0),
+                                                  {
+                                                      {0, resultBuffer},
+                                                  });
+
+        wgpu::RenderPassColorAttachment attachment = {
+            .view = writeToTexture.CreateView(),
+            .loadOp = wgpu::LoadOp::Clear,
+            .storeOp = wgpu::StoreOp::Store,
+            .clearValue = {0, 0, 0, 0},
+        };
+        wgpu::RenderPassDescriptor rpDesc = {
+            .colorAttachmentCount = 1,
+            .colorAttachments = &attachment,
+        };
+
+        wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
+        wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&rpDesc);
+        pass.SetPipeline(pipeline);
+        pass.SetBindGroup(0, bg);
+        pass.SetResourceTable(table);
+        pass.Draw(3);
+        pass.End();
+        wgpu::CommandBuffer commands = encoder.Finish();
+        queue.Submit(1, &commands);
+
+        uint32_t expected[] = {expectHasResource ? 1u : 0u};
+        EXPECT_BUFFER_U32_RANGE_EQ(expected, resultBuffer, 0, 1);
+    };
+
+    // Read texA, write texB (different textures), hasResource(texA) should return true
+    draw(texB, true);
+
+    // Read texA, write texA (same texture), hasResource(texA) should return false (hidden)
+    draw(texA, false);
+}
+
+// Test that we can hide a resource for one dispatch (using a storage texture write)
+// and dynamically unhide it for the next dispatch (by removing the storage write)
+// all within a single compute pass.
+TEST_P(ResourceTableTests, ImplicitHidingComputeMidPass) {
+    wgpu::ShaderModule module = utils::CreateShaderModule(device, R"(
+        enable chromium_experimental_resource_table;
+
+        @group(0) @binding(0) var<storage, read_write> results : array<u32>;
+        @group(0) @binding(1) var writeTex : texture_storage_2d<r32uint, write>;
+        @group(0) @binding(2) var<uniform> dispatchIndex : u32;
+
+        @compute @workgroup_size(1) fn main() {
+            let hasRead = hasResource<texture_2d<u32>>(0);
+            results[dispatchIndex] = u32(hasRead);
+            if (dispatchIndex == 0u) {
+                textureStore(writeTex, vec2u(0, 0), vec4u(123, 0, 0, 0));
+            }
+        }
+    )");
+
+    wgpu::ComputePipelineDescriptor csDesc = {.compute = {
+                                                  .module = module,
+                                              }};
+    wgpu::ComputePipeline pipeline = device.CreateComputePipeline(&csDesc);
+
+    // Create textures.
+    wgpu::TextureDescriptor tDesc{
+        .usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::StorageBinding,
+        .size = {1, 1},
+        .format = wgpu::TextureFormat::R32Uint,
+    };
+    wgpu::Texture texA = device.CreateTexture(&tDesc);
+    wgpu::Texture texB = device.CreateTexture(&tDesc);
+
+    // Create result buffer (4 elements: [hasRead0, val0, hasRead1, val1]).
+    wgpu::BufferDescriptor bDesc = {
+        .usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopySrc,
+        .size = 2 * sizeof(uint32_t),
+    };
+    wgpu::Buffer resultBuffer = device.CreateBuffer(&bDesc);
+
+    // Create uniform buffers for dispatch indices.
+    wgpu::Buffer dispatchIndex0 =
+        utils::CreateBufferFromData(device, wgpu::BufferUsage::Uniform, {0u});
+    wgpu::Buffer dispatchIndex1 =
+        utils::CreateBufferFromData(device, wgpu::BufferUsage::Uniform, {1u});
+
+    // Create resource table containing texA.
+    wgpu::ResourceTable table =
+        MakeResourceTable(1, {{0, {.textureView = CreateViewForTable(texA)}}});
+
+    // Create bind groups.
+    // bg0 writes to texA (causes hiding)
+    wgpu::BindGroup bg0 = utils::MakeBindGroup(device, pipeline.GetBindGroupLayout(0),
+                                               {
+                                                   {0, resultBuffer},
+                                                   {1, texA.CreateView()},
+                                                   {2, dispatchIndex0},
+                                               });
+    // bg1 writes to texB instead of texA (causes unhiding of texA)
+    wgpu::BindGroup bg1 = utils::MakeBindGroup(device, pipeline.GetBindGroupLayout(0),
+                                               {
+                                                   {0, resultBuffer},
+                                                   {1, texB.CreateView()},
+                                                   {2, dispatchIndex1},
+                                               });
+
+    wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
+    wgpu::ComputePassEncoder pass = encoder.BeginComputePass();
+    pass.SetPipeline(pipeline);
+    pass.SetResourceTable(table);
+
+    // Dispatch 1: texA is bound for writing, should be hidden.
+    pass.SetBindGroup(0, bg0);
+    pass.DispatchWorkgroups(1);
+
+    // Dispatch 2: texA is no longer bound for writing, should be unhidden.
+    pass.SetBindGroup(0, bg1);
+    pass.DispatchWorkgroups(1);
+
+    pass.End();
+    wgpu::CommandBuffer commands = encoder.Finish();
+    queue.Submit(1, &commands);
+
+    uint32_t expected[] = {
+        0,  // hidden
+        1   // visible
+    };
+    EXPECT_BUFFER_U32_RANGE_EQ(expected, resultBuffer, 0, 2);
+}
+
+// Test that writing to a texture as a render attachment hides it for the entire render pass,
+// and changing bind groups mid-pass does NOT unhide it.
+// TODO(crbug.com/522749739): Also test writing to a depth attachment, including depthReadOnly.
+TEST_P(ResourceTableTests, ImplicitHidingRenderMidPass) {
+    wgpu::ShaderModule vsModule = utils::CreateShaderModule(device, R"(
+        @vertex fn main(@builtin(vertex_index) VertexIndex : u32) -> @builtin(position) vec4f {
+            var pos = array<vec2f, 3>(
+                vec2f(-1.0, -1.0),
+                vec2f(3.0, -1.0),
+                vec2f(-1.0, 3.0)
+            );
+            return vec4f(pos[VertexIndex], 0.0, 1.0);
+        }
+    )");
+
+    wgpu::ShaderModule fsModule = utils::CreateShaderModule(device, R"(
+        enable chromium_experimental_resource_table;
+
+        @group(0) @binding(0) var<storage, read_write> results : array<u32>;
+        @group(0) @binding(1) var<uniform> drawIndex : u32;
+        @group(0) @binding(2) var writeTex : texture_storage_2d<r32uint, write>;
+
+        @fragment fn main() -> @location(0) u32 {
+            let hasRead = hasResource<texture_2d<u32>>(0);
+            results[drawIndex] = u32(hasRead);
+            if (drawIndex == 0u) {
+                textureStore(writeTex, vec2u(0, 0), vec4u(123, 0, 0, 0));
+            }
+            return 0u;
+        }
+    )");
+
+    utils::ComboRenderPipelineDescriptor desc;
+    desc.vertex.module = vsModule;
+    desc.cFragment.module = fsModule;
+    desc.cFragment.targetCount = 1;
+    desc.cTargets[0].format = wgpu::TextureFormat::R32Uint;
+    wgpu::RenderPipeline pipeline = device.CreateRenderPipeline(&desc);
+
+    // Create textures.
+    wgpu::TextureDescriptor tDesc{
+        .usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::StorageBinding,
+        .size = {1, 1},
+        .format = wgpu::TextureFormat::R32Uint,
+    };
+    wgpu::Texture texA = device.CreateTexture(&tDesc);
+    wgpu::Texture texB = device.CreateTexture(&tDesc);
+
+    // Create result buffer.
+    wgpu::BufferDescriptor bDesc = {
+        .usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopySrc,
+        .size = 2 * sizeof(uint32_t),
+    };
+    wgpu::Buffer resultBuffer = device.CreateBuffer(&bDesc);
+
+    // Create uniform buffers for draw indices.
+    wgpu::Buffer drawIndex0 = utils::CreateBufferFromData(device, wgpu::BufferUsage::Uniform, {0u});
+    wgpu::Buffer drawIndex1 = utils::CreateBufferFromData(device, wgpu::BufferUsage::Uniform, {1u});
+
+    // Create resource table containing texA.
+    wgpu::ResourceTable table =
+        MakeResourceTable(1, {{0, {.textureView = CreateViewForTable(texA)}}});
+
+    // Create bind groups.
+    // bg0 writes to texA (causes hiding)
+    wgpu::BindGroup bg0 = utils::MakeBindGroup(device, pipeline.GetBindGroupLayout(0),
+                                               {
+                                                   {0, resultBuffer},
+                                                   {1, drawIndex0},
+                                                   {2, texA.CreateView()},
+                                               });
+    // bg1 writes to texB instead of texA
+    wgpu::BindGroup bg1 = utils::MakeBindGroup(device, pipeline.GetBindGroupLayout(0),
+                                               {
+                                                   {0, resultBuffer},
+                                                   {1, drawIndex1},
+                                                   {2, texB.CreateView()},
+                                               });
+
+    utils::BasicRenderPass rp =
+        utils::CreateBasicRenderPass(device, 1, 1, wgpu::TextureFormat::R32Uint);
+
+    wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
+    wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&rp.renderPassInfo);
+    pass.SetPipeline(pipeline);
+    pass.SetResourceTable(table);
+
+    // Draw 1: writes to texA. texA should be hidden.
+    pass.SetBindGroup(0, bg0);
+    pass.Draw(3);
+
+    // Draw 2: does not write to texA. But because it's a render pass, texA must remain hidden.
+    pass.SetBindGroup(0, bg1);
+    pass.Draw(3);
+
+    pass.End();
+    wgpu::CommandBuffer commands = encoder.Finish();
+    queue.Submit(1, &commands);
+
+    uint32_t expected[] = {
+        0,  // hidden
+        0   // still hidden
+    };
+    EXPECT_BUFFER_U32_RANGE_EQ(expected, resultBuffer, 0, 2);
 }
 
 constexpr auto kWgslSampledTextureTypes = std::array{
@@ -782,7 +1113,7 @@ struct ResourceDescForTypeIDCase {
     // The descriptor used to create the resource
     std::variant<TextureDesc, SamplerDesc> desc;
 
-    // Create a view for a pinned texture for this case.
+    // Create a view for a texture for this case.
     wgpu::TextureView CreateTestView(const wgpu::Device& device) {
         auto& d = std::get<TextureDesc>(desc);
 
@@ -808,7 +1139,6 @@ struct ResourceDescForTypeIDCase {
         };
 
         wgpu::Texture texture = device.CreateTexture(&tDesc);
-        texture.Pin(wgpu::TextureUsage::TextureBinding);
         return texture.CreateView(&vDesc);
     }
 
@@ -816,16 +1146,16 @@ struct ResourceDescForTypeIDCase {
     wgpu::Sampler CreateTestSampler(const wgpu::Device& device) {
         auto& d = std::get<SamplerDesc>(desc);
 
-        wgpu::SamplerDescriptor desc{};
+        wgpu::SamplerDescriptor sDesc{};
         if (d.filtering) {
-            desc.magFilter = wgpu::FilterMode::Linear;
-            desc.minFilter = wgpu::FilterMode::Linear;
-            desc.mipmapFilter = wgpu::MipmapFilterMode::Linear;
+            sDesc.magFilter = wgpu::FilterMode::Linear;
+            sDesc.minFilter = wgpu::FilterMode::Linear;
+            sDesc.mipmapFilter = wgpu::MipmapFilterMode::Linear;
         }
         if (d.comparison) {
-            desc.compare = wgpu::CompareFunction::Less;
+            sDesc.compare = wgpu::CompareFunction::Less;
         }
-        return device.CreateSampler(&desc);
+        return device.CreateSampler(&sDesc);
     }
 };
 
@@ -1169,7 +1499,6 @@ TEST_P(ResourceTableTests, HasResourceOOBIsFalse) {
         .format = wgpu::TextureFormat::R8Unorm,
     };
     wgpu::Texture tex = device.CreateTexture(&tDesc);
-    tex.Pin(wgpu::TextureUsage::TextureBinding);
 
     wgpu::ResourceTable table = MakeResourceTable(3, {
                                                          {0, {.textureView = tex.CreateView()}},
@@ -1343,7 +1672,6 @@ TEST_P(ResourceTableTests, Sampler) {
     pDesc.primitive.topology = wgpu::PrimitiveTopology::PointList;
     wgpu::RenderPipeline pipeline = device.CreateRenderPipeline(&pDesc);
 
-    texture.Pin(wgpu::TextureUsage::TextureBinding);
     wgpu::ResourceTable table = MakeResourceTable(2, {
                                                          {0, {.sampler = sampler}},
                                                          {1, {.textureView = texture.CreateView()}},
@@ -1447,7 +1775,6 @@ TEST_P(ResourceTableTests, MultipleSamplers) {
             utils::MakeBindGroup(device, pipeline.GetBindGroupLayout(0), {{0, resultBuffer}});
 
         // Create resource table and add the samplers and texture view to it
-        texture.Pin(wgpu::TextureUsage::TextureBinding);
         wgpu::ResourceTable table = MakeResourceTable(
             c.tableSize, {
                              {c.samplerIndex0, {.sampler = samplerRepeat}},
@@ -1472,16 +1799,16 @@ TEST_P(ResourceTableTests, MultipleSamplers) {
         float expectedRed[4] = {1.0, 0.0, 0.0, 1.0};
 
         // repeat: 1,0 -> red, 1.5,0 -> green
-        EXPECT_BUFFER_FLOAT_RANGE_EQ(expectedRed, resultBuffer, 0 * 4 * sizeof(float), 4);
-        EXPECT_BUFFER_FLOAT_RANGE_EQ(expectedGreen, resultBuffer, 1 * 4 * sizeof(float), 4);
+        EXPECT_BUFFER_FLOAT_RANGE_EQ(expectedRed, resultBuffer, 0ULL * 4 * sizeof(float), 4);
+        EXPECT_BUFFER_FLOAT_RANGE_EQ(expectedGreen, resultBuffer, 1ULL * 4 * sizeof(float), 4);
 
         // mirror: 1,0 -> green, 1.5,0 -> red
-        EXPECT_BUFFER_FLOAT_RANGE_EQ(expectedGreen, resultBuffer, 2 * 4 * sizeof(float), 4);
-        EXPECT_BUFFER_FLOAT_RANGE_EQ(expectedRed, resultBuffer, 3 * 4 * sizeof(float), 4);
+        EXPECT_BUFFER_FLOAT_RANGE_EQ(expectedGreen, resultBuffer, 2ULL * 4 * sizeof(float), 4);
+        EXPECT_BUFFER_FLOAT_RANGE_EQ(expectedRed, resultBuffer, 3ULL * 4 * sizeof(float), 4);
 
         // clamp: 1,0 -> green, 1.5,0 -> green
-        EXPECT_BUFFER_FLOAT_RANGE_EQ(expectedGreen, resultBuffer, 4 * 4 * sizeof(float), 4);
-        EXPECT_BUFFER_FLOAT_RANGE_EQ(expectedGreen, resultBuffer, 5 * 4 * sizeof(float), 4);
+        EXPECT_BUFFER_FLOAT_RANGE_EQ(expectedGreen, resultBuffer, 4ULL * 4 * sizeof(float), 4);
+        EXPECT_BUFFER_FLOAT_RANGE_EQ(expectedGreen, resultBuffer, 5ULL * 4 * sizeof(float), 4);
     }
 }
 
@@ -1552,8 +1879,6 @@ TEST_P(ResourceTableTests, UseDefaultSamplers) {
 
     // Create resource table and only textures to it, no samplers, so that the default
     // samplers get used
-    colorTexture.Pin(wgpu::TextureUsage::TextureBinding);
-    depthTexture.Pin(wgpu::TextureUsage::TextureBinding);
     wgpu::ResourceTable table =
         MakeResourceTable(10, {
                                   {0, {.textureView = colorTexture.CreateView()}},
@@ -1576,17 +1901,17 @@ TEST_P(ResourceTableTests, UseDefaultSamplers) {
     float expectedGreen[4] = {1.0, 0.0, 0.0, 1.0};
 
     // The default non-filtering sampler should return red at (0.5, 0.5), and green at (0.6, 0.6)
-    EXPECT_BUFFER_FLOAT_RANGE_EQ(expectedRed, resultBuffer, 0 * 4 * sizeof(float), 4);
-    EXPECT_BUFFER_FLOAT_RANGE_EQ(expectedGreen, resultBuffer, 1 * 4 * sizeof(float), 4);
+    EXPECT_BUFFER_FLOAT_RANGE_EQ(expectedRed, resultBuffer, 0ULL * 4 * sizeof(float), 4);
+    EXPECT_BUFFER_FLOAT_RANGE_EQ(expectedGreen, resultBuffer, 1ULL * 4 * sizeof(float), 4);
 
     // The default filtering sampler is actually a non-filtering one, so should return the same
-    EXPECT_BUFFER_FLOAT_RANGE_EQ(expectedRed, resultBuffer, 2 * 4 * sizeof(float), 4);
-    EXPECT_BUFFER_FLOAT_RANGE_EQ(expectedGreen, resultBuffer, 3 * 4 * sizeof(float), 4);
+    EXPECT_BUFFER_FLOAT_RANGE_EQ(expectedRed, resultBuffer, 2ULL * 4 * sizeof(float), 4);
+    EXPECT_BUFFER_FLOAT_RANGE_EQ(expectedGreen, resultBuffer, 3ULL * 4 * sizeof(float), 4);
 
     // The comparison sampler is an 'always' one, so it should return 1.0, which the shader returns
     // in two of the vector elements.
     float expectedCompare[4] = {1.0, 42.0, 1.0, 83.5};
-    EXPECT_BUFFER_FLOAT_RANGE_EQ(expectedCompare, resultBuffer, 4 * 4 * sizeof(float), 4);
+    EXPECT_BUFFER_FLOAT_RANGE_EQ(expectedCompare, resultBuffer, 4ULL * 4 * sizeof(float), 4);
 }
 
 // Test that removing then adding a new sampler in a slot that already has a sampler of the same
@@ -1627,7 +1952,6 @@ TEST_P(ResourceTableTests, RemoveThenAddSamplerInSameSlot) {
 
     // Create texture
     wgpu::Texture texture = CreateCheckerboardTexture();
-    texture.Pin(wgpu::TextureUsage::TextureBinding);
 
     // Create samplers
     wgpu::Sampler samplerRepeat = CreateSampler(wgpu::AddressMode::Repeat);
@@ -1671,19 +1995,19 @@ TEST_P(ResourceTableTests, RemoveThenAddSamplerInSameSlot) {
     draw();
 
     // repeat: 1,0 -> red, 1.5,0 -> green
-    EXPECT_BUFFER_FLOAT_RANGE_EQ(expectedRed, resultBuffer, 0 * 4 * sizeof(float), 4);
-    EXPECT_BUFFER_FLOAT_RANGE_EQ(expectedGreen, resultBuffer, 1 * 4 * sizeof(float), 4);
+    EXPECT_BUFFER_FLOAT_RANGE_EQ(expectedRed, resultBuffer, 0ULL * 4 * sizeof(float), 4);
+    EXPECT_BUFFER_FLOAT_RANGE_EQ(expectedGreen, resultBuffer, 1ULL * 4 * sizeof(float), 4);
 
     // Now test removing then adding mirror sampler
-    EXPECT_EQ(wgpu::Status::Success, table.RemoveBinding(1));
+    EXPECT_EQ(wgpu::Status::Success, table.Remove(1));
     WaitForAllOperations();
     res = {.sampler = samplerMirror};
     EXPECT_EQ(wgpu::Status::Success, table.Update(1, &res));
     draw();
 
     // mirror: 1,0 -> green, 1.5,0 -> red
-    EXPECT_BUFFER_FLOAT_RANGE_EQ(expectedGreen, resultBuffer, 0 * 4 * sizeof(float), 4);
-    EXPECT_BUFFER_FLOAT_RANGE_EQ(expectedRed, resultBuffer, 1 * 4 * sizeof(float), 4);
+    EXPECT_BUFFER_FLOAT_RANGE_EQ(expectedGreen, resultBuffer, 0ULL * 4 * sizeof(float), 4);
+    EXPECT_BUFFER_FLOAT_RANGE_EQ(expectedRed, resultBuffer, 1ULL * 4 * sizeof(float), 4);
 }
 
 // Test that adding and removing samplers in the same slot between draws ensure that
@@ -1721,7 +2045,6 @@ TEST_P(ResourceTableTests, RemoveThenAddSamplerMultipleInSameSlot) {
 
     // Create texture
     wgpu::Texture texture = CreateCheckerboardTexture();
-    texture.Pin(wgpu::TextureUsage::TextureBinding);
 
     // Create samplers
     wgpu::Sampler samplerRepeat = CreateSampler(wgpu::AddressMode::Repeat);
@@ -1770,19 +2093,19 @@ TEST_P(ResourceTableTests, RemoveThenAddSamplerMultipleInSameSlot) {
     draw();
 
     // repeat: 1,0 -> red, 1.5,0 -> green
-    EXPECT_BUFFER_FLOAT_RANGE_EQ(expectedRed, resultBuffer, 0 * 4 * sizeof(float), 4);
-    EXPECT_BUFFER_FLOAT_RANGE_EQ(expectedGreen, resultBuffer, 1 * 4 * sizeof(float), 4);
+    EXPECT_BUFFER_FLOAT_RANGE_EQ(expectedRed, resultBuffer, 0ULL * 4 * sizeof(float), 4);
+    EXPECT_BUFFER_FLOAT_RANGE_EQ(expectedGreen, resultBuffer, 1ULL * 4 * sizeof(float), 4);
 
     // Remove then add mirror samplers
     for (auto sampler : samplerMirror) {
-        EXPECT_EQ(wgpu::Status::Success, table.RemoveBinding(1));
+        EXPECT_EQ(wgpu::Status::Success, table.Remove(1));
         WaitForAllOperations();
         res = {.sampler = sampler};
         EXPECT_EQ(wgpu::Status::Success, table.Update(1, &res));
     }
 
     // Finally, remove and add clamp sampler
-    EXPECT_EQ(wgpu::Status::Success, table.RemoveBinding(1));
+    EXPECT_EQ(wgpu::Status::Success, table.Remove(1));
     WaitForAllOperations();
     res = {.sampler = samplerClamp};
     EXPECT_EQ(wgpu::Status::Success, table.Update(1, &res));
@@ -1791,8 +2114,8 @@ TEST_P(ResourceTableTests, RemoveThenAddSamplerMultipleInSameSlot) {
     draw();
 
     // clamp: 1,0 -> green, 1.5,0 -> green
-    EXPECT_BUFFER_FLOAT_RANGE_EQ(expectedGreen, resultBuffer, 0 * 4 * sizeof(float), 4);
-    EXPECT_BUFFER_FLOAT_RANGE_EQ(expectedGreen, resultBuffer, 1 * 4 * sizeof(float), 4);
+    EXPECT_BUFFER_FLOAT_RANGE_EQ(expectedGreen, resultBuffer, 0ULL * 4 * sizeof(float), 4);
+    EXPECT_BUFFER_FLOAT_RANGE_EQ(expectedGreen, resultBuffer, 1ULL * 4 * sizeof(float), 4);
 }
 
 // Test what happens when we add more than kD3D12MaxUniqueSamplers unique samplers
@@ -1889,7 +2212,7 @@ TEST_P(ResourceTableTests, RemoveAddDuplicateSampler) {
 
     {
         // Remove the sampler in slot 1
-        EXPECT_EQ(wgpu::Status::Success, table.RemoveBinding(1));
+        EXPECT_EQ(wgpu::Status::Success, table.Remove(1));
 
         WaitForAllOperations();
 
@@ -2005,7 +2328,7 @@ TEST_P(ResourceTableTests, AddAndRemoveMaxSamplersTwice) {
 
     // Remove all samplers
     for (uint32_t i : Range(kD3D12MaxUniqueSamplers)) {
-        EXPECT_EQ(wgpu::Status::Success, table.RemoveBinding(i));
+        EXPECT_EQ(wgpu::Status::Success, table.Remove(i));
     }
 
     // Add different samplers to slots kD3D12MaxUniqueSamplers..kD3D12MaxUniqueSamplers*2-1
@@ -2052,8 +2375,6 @@ TEST_P(ResourceTableTests, RemoveThenAddTextureInSameSlot) {
     // Create textures
     wgpu::Texture textureRed = CreateColorTexture(utils::RGBA8::kRed);
     wgpu::Texture textureGreen = CreateColorTexture(utils::RGBA8::kGreen);
-    textureRed.Pin(wgpu::TextureUsage::TextureBinding);
-    textureGreen.Pin(wgpu::TextureUsage::TextureBinding);
 
     // Create the result buffer resource
     wgpu::BufferDescriptor bDesc = {
@@ -2092,7 +2413,7 @@ TEST_P(ResourceTableTests, RemoveThenAddTextureInSameSlot) {
     EXPECT_BUFFER_FLOAT_RANGE_EQ(expectedRed, resultBuffer, 0, 4);
 
     // Now test removing and adding the green texture in the same slot
-    EXPECT_EQ(wgpu::Status::Success, table.RemoveBinding(0));
+    EXPECT_EQ(wgpu::Status::Success, table.Remove(0));
     WaitForAllOperations();
     res = {.textureView = textureGreen.CreateView()};
     EXPECT_EQ(wgpu::Status::Success, table.Update(0, &res));
@@ -2135,9 +2456,6 @@ TEST_P(ResourceTableTests, RemoveThenAddTextureMultipleInSameSlot) {
     wgpu::Texture textureRed = CreateColorTexture(utils::RGBA8::kRed);
     wgpu::Texture textureGreen = CreateColorTexture(utils::RGBA8::kGreen);
     wgpu::Texture textureBlue = CreateColorTexture(utils::RGBA8::kBlue);
-    textureRed.Pin(wgpu::TextureUsage::TextureBinding);
-    textureGreen.Pin(wgpu::TextureUsage::TextureBinding);
-    textureBlue.Pin(wgpu::TextureUsage::TextureBinding);
 
     // Create the result buffer resource
     wgpu::BufferDescriptor bDesc = {
@@ -2176,13 +2494,13 @@ TEST_P(ResourceTableTests, RemoveThenAddTextureMultipleInSameSlot) {
     EXPECT_BUFFER_FLOAT_RANGE_EQ(expectedRed, resultBuffer, 0, 4);
 
     // Remove then add green texture (this could be done in a loop with multiple textures)
-    EXPECT_EQ(wgpu::Status::Success, table.RemoveBinding(0));
+    EXPECT_EQ(wgpu::Status::Success, table.Remove(0));
     WaitForAllOperations();
     res = {.textureView = textureGreen.CreateView()};
     EXPECT_EQ(wgpu::Status::Success, table.Update(0, &res));
 
     // Now test removing and adding the blue texture in the same slot
-    EXPECT_EQ(wgpu::Status::Success, table.RemoveBinding(0));
+    EXPECT_EQ(wgpu::Status::Success, table.Remove(0));
     WaitForAllOperations();
     res = {.textureView = textureBlue.CreateView()};
     EXPECT_EQ(wgpu::Status::Success, table.Update(0, &res));
@@ -2190,8 +2508,8 @@ TEST_P(ResourceTableTests, RemoveThenAddTextureMultipleInSameSlot) {
     EXPECT_BUFFER_FLOAT_RANGE_EQ(expectedBlue, resultBuffer, 0, 4);
 }
 
-// Check that Pin forces zero-initialization of the resources.
-TEST_P(ResourceTableTests, PinDoesZeroInit) {
+// Check that zero-initialization of the resources happens implicitly
+TEST_P(ResourceTableTests, ImplicitZeroInit) {
     // TODO(crbug.com/385158827): Fails on older WARP 10.0.19041.5794
     DAWN_SUPPRESS_TEST_IF(IsWARP());
 
@@ -2240,10 +2558,8 @@ TEST_P(ResourceTableTests, PinDoesZeroInit) {
                                                   {0, resultBuffer},
                                               });
 
-    // Check that Pin does the initial zero init.
+    // Check that the initial zero init happens implicitly.
     {
-        tex.Pin(wgpu::TextureUsage::TextureBinding);
-
         wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
         wgpu::ComputePassEncoder pass = encoder.BeginComputePass();
         pass.SetResourceTable(table);
@@ -2262,8 +2578,6 @@ TEST_P(ResourceTableTests, PinDoesZeroInit) {
     // set some non-zero value in the texture which hopefully would tell us if the lazy clear didn't
     // happen.
     {
-        tex.Unpin();
-
         wgpu::RenderPassColorAttachment attachment = {
             .view = tex.CreateView(),
             .loadOp = wgpu::LoadOp::Clear,
@@ -2282,10 +2596,8 @@ TEST_P(ResourceTableTests, PinDoesZeroInit) {
         device.GetQueue().Submit(1, &commands);
     }
 
-    // Check that Pin does the zero init after a discard.
+    // Check that the zero init happens implicitly after a discard.
     {
-        tex.Pin(wgpu::TextureUsage::TextureBinding);
-
         wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
         wgpu::ComputePassEncoder pass = encoder.BeginComputePass();
         pass.SetResourceTable(table);
@@ -2296,14 +2608,13 @@ TEST_P(ResourceTableTests, PinDoesZeroInit) {
 
         wgpu::CommandBuffer commands = encoder.Finish();
         device.GetQueue().Submit(1, &commands);
-        tex.Unpin();
 
         EXPECT_BUFFER_U32_EQ(0, resultBuffer, 0);
     }
 }
 
 // Check that a resource table slot can be updated only after all commands submitted prior to
-// RemoveBinding are completed.
+// Remove are completed.
 TEST_P(ResourceTableTests, UpdateAfterRemoveRequiresGPUIsFinished) {
     wgpu::TextureDescriptor tDesc{
         .usage = wgpu::TextureUsage::TextureBinding,
@@ -2323,7 +2634,7 @@ TEST_P(ResourceTableTests, UpdateAfterRemoveRequiresGPUIsFinished) {
     queue.OnSubmittedWorkDone(
         wgpu::CallbackMode::AllowSpontaneous,
         [&](wgpu::QueueWorkDoneStatus, wgpu::StringView) { updateValid = true; });
-    EXPECT_EQ(wgpu::Status::Success, table.RemoveBinding(0));
+    EXPECT_EQ(wgpu::Status::Success, table.Remove(0));
 
     if (updateValid) {
         EXPECT_EQ(wgpu::Status::Success, table.Update(0, &resource));
@@ -2342,7 +2653,7 @@ TEST_P(ResourceTableTests, UpdateAfterRemoveRequiresGPUIsFinished) {
 }
 
 // Check that a resource table slot can be updated only after all commands submitted prior to
-// RemoveBinding are completed.
+// Remove are completed.
 TEST_P(ResourceTableTests, UpdateAfterRemoveRequiresGPUIsFinished_ErrorBindGroup) {
     DAWN_TEST_UNSUPPORTED_IF(HasToggleEnabled("skip_validation"));
 
@@ -2379,7 +2690,7 @@ TEST_P(ResourceTableTests, UpdateAfterRemoveRequiresGPUIsFinished_ErrorBindGroup
         queue.OnSubmittedWorkDone(
             wgpu::CallbackMode::AllowSpontaneous,
             [&](wgpu::QueueWorkDoneStatus, wgpu::StringView) { updateValid = true; });
-        EXPECT_EQ(wgpu::Status::Success, table.RemoveBinding(0));
+        EXPECT_EQ(wgpu::Status::Success, table.Remove(0));
 
         if (updateValid) {
             EXPECT_EQ(wgpu::Status::Success, table.Update(0, &resource));
@@ -2398,8 +2709,8 @@ TEST_P(ResourceTableTests, UpdateAfterRemoveRequiresGPUIsFinished_ErrorBindGroup
     }
 }
 
-// Check that Update and InsertBinding make the new binding visible in the resource table.
-TEST_P(ResourceTableTests, UpdateAndInsertBindingMakeBindingVisible) {
+// Check that Update and Insert make the new binding visible in the resource table.
+TEST_P(ResourceTableTests, UpdateAndInsertMakeBindingVisible) {
     // TODO(crbug.com/385158827): Fails on older WARP 10.0.19041.5794
     DAWN_SUPPRESS_TEST_IF(IsWARP());
 
@@ -2409,38 +2720,38 @@ TEST_P(ResourceTableTests, UpdateAndInsertBindingMakeBindingVisible) {
     TestHasU8BindingsAll(table, {{}, {}});
 
     // Update makes the entry visible.
-    wgpu::BindingResource resource0 = {.textureView = MakePinnedU8View(17)};
+    wgpu::BindingResource resource0 = {.textureView = MakeU8View(17)};
     EXPECT_EQ(wgpu::Status::Success, table.Update(0, &resource0));
     TestHasU8BindingsAll(table, {{17}, {}});
 
-    // InsertBinding makes the entry visible.
-    wgpu::BindingResource resource1 = {.textureView = MakePinnedU8View(42)};
-    EXPECT_EQ(1u, table.InsertBinding(&resource1));
+    // Insert makes the entry visible.
+    wgpu::BindingResource resource1 = {.textureView = MakeU8View(42)};
+    EXPECT_EQ(1u, table.Insert(&resource1));
     TestHasU8BindingsAll(table, {{17}, {42}});
 }
 
-// Check that RemoveBinding instantly makes the binding not visible, both for entries added with
-// Update and InsertBinding.
-TEST_P(ResourceTableTests, RemoveBindingMakeBindingInvalid) {
+// Check that Remove instantly makes the binding not visible, both for entries added with
+// Update and Insert.
+TEST_P(ResourceTableTests, RemoveMakeBindingInvalid) {
     // TODO(crbug.com/385158827): Fails on older WARP 10.0.19041.5794
     DAWN_SUPPRESS_TEST_IF(IsWARP());
 
-    // Fill a resource table with both Update and InsertBinding.
+    // Fill a resource table with both Update and Insert.
     wgpu::ResourceTable table = MakeResourceTable(2);
 
-    wgpu::BindingResource resource0 = {.textureView = MakePinnedU8View(100)};
+    wgpu::BindingResource resource0 = {.textureView = MakeU8View(100)};
     EXPECT_EQ(wgpu::Status::Success, table.Update(0, &resource0));
 
-    wgpu::BindingResource resource1 = {.textureView = MakePinnedU8View(101)};
-    EXPECT_EQ(1u, table.InsertBinding(&resource1));
+    wgpu::BindingResource resource1 = {.textureView = MakeU8View(101)};
+    EXPECT_EQ(1u, table.Insert(&resource1));
 
     // Before we remove bindings, they are all valid.
     TestHasU8BindingsAll(table, {{100}, {101}});
 
-    // RemoveBinding immediately makes bindings invalid.
-    EXPECT_EQ(wgpu::Status::Success, table.RemoveBinding(1));
+    // Remove immediately makes bindings invalid.
+    EXPECT_EQ(wgpu::Status::Success, table.Remove(1));
     TestHasU8BindingsAll(table, {{100}, {}});
-    EXPECT_EQ(wgpu::Status::Success, table.RemoveBinding(0));
+    EXPECT_EQ(wgpu::Status::Success, table.Remove(0));
     TestHasU8BindingsAll(table, {{}, {}});
 }
 
@@ -2451,18 +2762,18 @@ TEST_P(ResourceTableTests, ReplaceBinding) {
 
     // Create the test resource table.
     wgpu::ResourceTable table = MakeResourceTable(1);
-    wgpu::BindingResource resource = {.textureView = MakePinnedU8View(19)};
+    wgpu::BindingResource resource = {.textureView = MakeU8View(19)};
     EXPECT_EQ(wgpu::Status::Success, table.Update(0, &resource));
 
     // Test removing a binding that was previously there.
     TestHasU8BindingsAll(table, {{19}});
-    EXPECT_EQ(wgpu::Status::Success, table.RemoveBinding(0));
+    EXPECT_EQ(wgpu::Status::Success, table.Remove(0));
     TestHasU8BindingsAll(table, {{}});
 
     /// Add it back a new entry, the shader should be seeing the updated entry.
     WaitForAllOperations();
 
-    wgpu::BindingResource newResource = {.textureView = MakePinnedU8View(23)};
+    wgpu::BindingResource newResource = {.textureView = MakeU8View(23)};
     EXPECT_EQ(wgpu::Status::Success, table.Update(0, &newResource));
     TestHasU8BindingsAll(table, {{23}});
 }
@@ -2474,12 +2785,12 @@ TEST_P(ResourceTableTests, ReplaceWithSameBinding) {
 
     // Create the test resource table.
     wgpu::ResourceTable table = MakeResourceTable(1);
-    wgpu::BindingResource resource = {.textureView = MakePinnedU8View(19)};
+    wgpu::BindingResource resource = {.textureView = MakeU8View(19)};
     EXPECT_EQ(wgpu::Status::Success, table.Update(0, &resource));
 
     // Test removing a binding that was previously there.
     TestHasU8BindingsAll(table, {{19}});
-    EXPECT_EQ(wgpu::Status::Success, table.RemoveBinding(0));
+    EXPECT_EQ(wgpu::Status::Success, table.Remove(0));
     TestHasU8BindingsAll(table, {{}});
 
     /// Add it back a new entry, the shader should be seeing the updated entry.
@@ -2498,25 +2809,25 @@ TEST_P(ResourceTableTests, SinglePassMultipleResourceTables) {
     std::vector<wgpu::BindingResource> resources;
 
     wgpu::ResourceTable table0 = MakeResourceTable(2);
-    resources.push_back(wgpu::BindingResource{.textureView = MakePinnedU8View(17)});
+    resources.push_back(wgpu::BindingResource{.textureView = MakeU8View(17)});
     EXPECT_EQ(wgpu::Status::Success, table0.Update(0, &resources.back()));
-    resources.push_back(wgpu::BindingResource{.textureView = MakePinnedU8View(18)});
+    resources.push_back(wgpu::BindingResource{.textureView = MakeU8View(18)});
     EXPECT_EQ(wgpu::Status::Success, table0.Update(1, &resources.back()));
 
     wgpu::ResourceTable table1 = MakeResourceTable(3);
-    resources.push_back(wgpu::BindingResource{.textureView = MakePinnedU8View(27)});
+    resources.push_back(wgpu::BindingResource{.textureView = MakeU8View(27)});
     EXPECT_EQ(wgpu::Status::Success, table1.Update(0, &resources.back()));
     // Leave slot 1 empty
-    resources.push_back(wgpu::BindingResource{.textureView = MakePinnedU8View(29)});
+    resources.push_back(wgpu::BindingResource{.textureView = MakeU8View(29)});
     EXPECT_EQ(wgpu::Status::Success, table1.Update(2, &resources.back()));
 
     wgpu::ResourceTable table2 = MakeResourceTable(4);
-    resources.push_back(wgpu::BindingResource{.textureView = MakePinnedU8View(37)});
+    resources.push_back(wgpu::BindingResource{.textureView = MakeU8View(37)});
     EXPECT_EQ(wgpu::Status::Success, table2.Update(0, &resources.back()));
-    resources.push_back(wgpu::BindingResource{.textureView = MakePinnedU8View(38)});
+    resources.push_back(wgpu::BindingResource{.textureView = MakeU8View(38)});
     EXPECT_EQ(wgpu::Status::Success, table2.Update(1, &resources.back()));
     // Leave slot 2 empty
-    resources.push_back(wgpu::BindingResource{.textureView = MakePinnedU8View(40)});
+    resources.push_back(wgpu::BindingResource{.textureView = MakeU8View(40)});
     EXPECT_EQ(wgpu::Status::Success, table2.Update(3, &resources.back()));
 
     auto case0 = TableAndExpected(table0, {{17, 18}});

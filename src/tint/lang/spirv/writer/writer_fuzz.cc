@@ -87,6 +87,7 @@ struct FuzzedOptions {
     bool polyfill_length_scalar_float;
     bool polyfill_distance_scalar_float;
     bool collapse_subgroup_min_max;
+    bool replace_workgroup_atomic_store_with_exchange;
 
     /// Reflect the fields of this class so that it can be used by tint::ForeachField()
     TINT_REFLECT(FuzzedOptions,
@@ -123,7 +124,8 @@ struct FuzzedOptions {
                  cooperative_matrix_stride_is_matrix_elements,
                  polyfill_length_scalar_float,
                  polyfill_distance_scalar_float,
-                 collapse_subgroup_min_max);
+                 collapse_subgroup_min_max,
+                 replace_workgroup_atomic_store_with_exchange);
     TINT_REFLECT_HASH_CODE(FuzzedOptions);
 };
 
@@ -138,10 +140,12 @@ Result<SuccessType> ValidateUsingVulkan(const std::string& vk_icd_path,
     // This setenv call is why this works on Linux/Mac but not Windows
     setenv("VK_ICD_FILENAMES", vk_icd_path.c_str(), 1);
 
+    TINT_BEGIN_DISABLE_WARNING(OLD_STYLE_CAST);
     VkApplicationInfo app_info = {
         .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
         .apiVersion = VK_API_VERSION_1_1,
     };
+    TINT_END_DISABLE_WARNING(OLD_STYLE_CAST);
 
     VkInstanceCreateInfo create_info = {
         .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
@@ -349,6 +353,8 @@ Result<SuccessType> IRFuzzer(core::ir::Module& module,
     options.workarounds.cooperative_matrix_stride_is_matrix_elements =
         fuzzed_options.cooperative_matrix_stride_is_matrix_elements;
     options.workarounds.collapse_subgroup_min_max = fuzzed_options.collapse_subgroup_min_max;
+    options.workarounds.replace_workgroup_atomic_store_with_exchange =
+        fuzzed_options.replace_workgroup_atomic_store_with_exchange;
     options.multisampled_framebuffer_fetch = fuzzed_options.multisampled_framebuffer_fetch;
 
     TINT_CHECK_RESULT_UNWRAP(output, Generate(module, options));
@@ -387,6 +393,4 @@ Result<SuccessType> IRFuzzer(core::ir::Module& module,
 }  // namespace
 }  // namespace tint::spirv::writer
 
-TINT_IR_MODULE_FUZZER(tint::spirv::writer::IRFuzzer,
-                      tint::core::ir::Capabilities{},
-                      tint::spirv::writer::kPrinterCapabilities);
+TINT_IR_MODULE_FUZZER(tint::spirv::writer::IRFuzzer);

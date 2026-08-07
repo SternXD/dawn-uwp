@@ -32,6 +32,7 @@
 #include <utility>
 
 #include "src/dawn/native/WaitAnySystemEvent.h"
+#include "src/utils/numeric.h"
 
 namespace dawn::native::d3d {
 
@@ -53,7 +54,7 @@ ResultOrError<SystemEventReceiver> Queue::GetSystemEventReceiver() {
         if (fenceEvent == nullptr) {
             return DAWN_INTERNAL_ERROR("CreateEvent failed");
         }
-        receiver = SystemEventReceiver(utils::SystemHandle::Acquire(fenceEvent));
+        receiver = SystemEventReceiver(SystemHandle::Acquire(fenceEvent));
     }
 
     return receiver;
@@ -68,9 +69,9 @@ MaybeError Queue::ReturnSystemEventReceivers(std::span<SystemEventReceiver> rece
     mAvailableEventReceivers.Use([&](auto availableEventReceivers) {
         size_t count =
             std::min(receivers.size(), kMaxEventReceivers - availableEventReceivers->size());
-        availableEventReceivers->insert(availableEventReceivers->end(),
-                                        std::make_move_iterator(receivers.begin()),
-                                        std::make_move_iterator(receivers.begin() + count));
+        availableEventReceivers->insert(
+            availableEventReceivers->end(), std::make_move_iterator(receivers.begin()),
+            std::make_move_iterator(receivers.begin() + sign_cast(count)));
     });
     return {};
 }

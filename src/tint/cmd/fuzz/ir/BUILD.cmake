@@ -37,11 +37,11 @@
 include(cmd/fuzz/ir/as/BUILD.cmake)
 include(cmd/fuzz/ir/dis/BUILD.cmake)
 
-if(TINT_BUILD_IR_BINARY AND TINT_BUILD_WGSL_READER)
+if(TINT_BUILD_FUZZERS AND TINT_BUILD_IR_BINARY AND TINT_BUILD_WGSL_READER)
 ################################################################################
 # Target:    tint_cmd_fuzz_ir_fuzz_cmd
 # Kind:      fuzz_cmd
-# Condition: TINT_BUILD_IR_BINARY AND TINT_BUILD_WGSL_READER
+# Condition: TINT_BUILD_FUZZERS AND TINT_BUILD_IR_BINARY AND TINT_BUILD_WGSL_READER
 ################################################################################
 tint_add_target(tint_cmd_fuzz_ir_fuzz_cmd fuzz_cmd
   cmd/fuzz/ir/main_fuzz.cc
@@ -59,8 +59,6 @@ tint_target_add_dependencies(tint_cmd_fuzz_ir_fuzz_cmd fuzz_cmd
   tint_lang_core_ir_binary_fuzz
   tint_lang_core_ir_transform_fuzz
   tint_lang_core_type
-  tint_lang_hlsl_writer_raise_fuzz
-  tint_lang_wgsl_writer_raise_fuzz
   tint_utils
   tint_utils_bytes
   tint_utils_containers
@@ -89,6 +87,7 @@ endif(TINT_BUILD_GLSL_WRITER)
 
 if(TINT_BUILD_HLSL_WRITER)
   tint_target_add_dependencies(tint_cmd_fuzz_ir_fuzz_cmd fuzz_cmd
+    tint_lang_hlsl_writer_raise_fuzz
     tint_lang_hlsl_writer_fuzz
   )
 endif(TINT_BUILD_HLSL_WRITER)
@@ -113,16 +112,19 @@ endif(TINT_BUILD_SPV_WRITER)
 
 if(TINT_BUILD_WGSL_WRITER)
   tint_target_add_dependencies(tint_cmd_fuzz_ir_fuzz_cmd fuzz_cmd
+    tint_lang_wgsl_writer_raise_fuzz
     tint_lang_wgsl_writer_fuzz
   )
 endif(TINT_BUILD_WGSL_WRITER)
 
 tint_target_set_output_name(tint_cmd_fuzz_ir_fuzz_cmd fuzz_cmd "tint_ir_fuzzer")
 
-endif(TINT_BUILD_IR_BINARY AND TINT_BUILD_WGSL_READER)
+endif(TINT_BUILD_FUZZERS AND TINT_BUILD_IR_BINARY AND TINT_BUILD_WGSL_READER)
+if(TINT_BUILD_FUZZERS)
 ################################################################################
 # Target:    tint_cmd_fuzz_ir_fuzz
 # Kind:      fuzz
+# Condition: TINT_BUILD_FUZZERS
 ################################################################################
 tint_add_target(tint_cmd_fuzz_ir_fuzz fuzz
   cmd/fuzz/ir/fuzz.cc
@@ -165,3 +167,5 @@ if(TINT_BUILD_WGSL_READER)
     tint_lang_wgsl_reader
   )
 endif(TINT_BUILD_WGSL_READER)
+
+endif(TINT_BUILD_FUZZERS)

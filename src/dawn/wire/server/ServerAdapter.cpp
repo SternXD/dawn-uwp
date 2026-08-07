@@ -37,7 +37,7 @@
 namespace dawn::wire::server {
 
 WireResult Server::DoAdapterRequestDevice(Known<WGPUAdapter> adapter,
-                                          ObjectHandle eventManager,
+                                          Known<WGPUInstance> instance,
                                           WGPUFuture future,
                                           ObjectHandle deviceHandle,
                                           WGPUFuture deviceLostFuture,
@@ -46,14 +46,14 @@ WireResult Server::DoAdapterRequestDevice(Known<WGPUAdapter> adapter,
     WIRE_TRY(Allocate(&device, deviceHandle, AllocationState::Reserved));
 
     auto userdata = MakeUserdata<RequestDeviceUserdata>();
-    userdata->eventManager = eventManager;
+    userdata->instanceId = instance.id;
     userdata->future = future;
     userdata->device = device.AsHandle();
     userdata->deviceLostFuture = deviceLostFuture;
 
     // Update the descriptor with the device lost callback associated with this request.
     auto deviceLostUserdata = MakeUserdata<DeviceLostUserdata>();
-    deviceLostUserdata->eventManager = eventManager;
+    deviceLostUserdata->instanceId = instance.id;
     deviceLostUserdata->future = deviceLostFuture;
 
     WGPUDeviceDescriptor desc = *descriptor;
@@ -84,7 +84,7 @@ void Server::OnRequestDeviceCallback(RequestDeviceUserdata* data,
                                      WGPUDevice device,
                                      WGPUStringView message) {
     ReturnAdapterRequestDeviceCallbackCmd cmd = {};
-    cmd.eventManager = data->eventManager;
+    cmd.instanceId = data->instanceId;
     cmd.future = data->future;
     cmd.status = status;
     cmd.message = message;
@@ -101,8 +101,9 @@ void Server::OnRequestDeviceCallback(RequestDeviceUserdata* data,
     // the request to preserve callback ordering.
     FreeMembers<WGPUSupportedFeatures> supportedFeatures(mProcs);
     mProcs->deviceGetFeatures(device, &supportedFeatures);
-    absl::Span<const WGPUFeatureName> features(supportedFeatures.features,
-                                               supportedFeatures.featureCount);
+    // SAFETY: WebGPU API guarantees that the returned features are valid.
+    Span<const WGPUFeatureName> DAWN_UNSAFE_BUFFERS(
+        features(supportedFeatures.features, supportedFeatures.featureCount));
     for (WGPUFeatureName feature : features) {
         if (!IsFeatureSupported(feature)) {
             // Release the device.
@@ -115,8 +116,7 @@ void Server::OnRequestDeviceCallback(RequestDeviceUserdata* data,
             return;
         }
     }
-    cmd.featuresCount = features.size();
-    cmd.features = features.data();
+    cmd.features = features;
 
     // Query and report the adapter limits, including all known extension limits.
     // TODO(crbug.com/421950205): Use dawn::utils::ComboLimits here.

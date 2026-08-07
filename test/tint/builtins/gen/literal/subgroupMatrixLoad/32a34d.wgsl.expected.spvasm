@@ -53,7 +53,7 @@
 %_ptr_StorageBuffer__arr_int_uint_1024 = OpTypePointer StorageBuffer %_arr_int_uint_1024
      %uint_0 = OpConstant %uint 0
 %_ptr_StorageBuffer_int = OpTypePointer StorageBuffer %int
-    %uint_64 = OpConstant %uint 64
+      %int_8 = OpConstant %int 8
        %bool = OpTypeBool
       %int_0 = OpConstant %int 0
          %56 = OpTypeFunction %void
@@ -94,7 +94,7 @@
          %41 = OpFunctionCall %14 %subgroupMatrixLoad_32a34d
          %42 = OpAccessChain %_ptr_StorageBuffer__arr_int_uint_1024 %1 %uint_0
          %45 = OpAccessChain %_ptr_StorageBuffer_int %42 %uint_0
-               OpCooperativeMatrixStoreKHR %45 %41 %uint_0 %uint_64 NonPrivatePointer
+               OpCooperativeMatrixStoreKHR %45 %41 %uint_0 %int_8 NonPrivatePointer
                OpReturn
                OpFunctionEnd
 %compute_main = OpFunction %void None %56

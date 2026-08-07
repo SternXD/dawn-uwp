@@ -97,67 +97,6 @@ config("internal_config") {
 
   cflags = []
 
-  if (is_clang) {
-    # We use __builtin_assume liberally in DAWN_ASSERT, allow ignoring
-    # side-effects there.
-    cflags += [ "-Wno-assume" ]
-
-    # Flags use of __COUNTER__, which is used in histogram macros that were
-    # largely copied from Chromium. Chromium continues to use __COUNTER__ in
-    # their copy.
-    cflags += [ "-Wno-c2y-extensions" ]
-
-    # Dawn doesn't have the annotations to work with this analysis.
-    cflags_cc = [ "-Wno-thread-safety" ]
-  }
-
-  # Enable more warnings that were found when using Dawn in other projects.
-  # Add them only when building in standalone because we control which clang
-  # version we use. Otherwise we risk breaking projects depending on Dawn when
-  # the use a different clang version.
-  if (dawn_standalone && is_clang) {
-    cflags += [
-      "-Wconditional-uninitialized",
-      "-Wcstring-format-directive",
-      "-Wctad-maybe-unsupported",
-      "-Wc++11-narrowing",
-      "-Wdeprecated-copy",
-      "-Wdeprecated-copy-dtor",
-      "-Wduplicate-enum",
-      "-Wextra-semi",
-      "-Wextra-semi-stmt",
-      "-Wimplicit-fallthrough",
-      "-Winconsistent-missing-destructor-override",
-      "-Winvalid-offsetof",
-      "-Wmissing-field-initializers",
-      "-Wnon-c-typedef-for-linkage",
-      "-Wpessimizing-move",
-      "-Wrange-loop-analysis",
-      "-Wredundant-move",
-      "-Wshadow-field",
-      "-Wstrict-prototypes",
-      "-Wsuggest-destructor-override",
-      "-Wsuggest-override",
-      "-Wtautological-unsigned-zero-compare",
-      "-Wunreachable-code-aggressive",
-      "-Wunused-but-set-variable",
-      "-Wunused-macros",
-    ]
-
-    if (is_win) {
-      cflags += [
-        # clang-cl doesn't know -pedantic, pass it explicitly to the clang
-        # driver
-        "/clang:-pedantic",
-
-        # Allow the use of __uuidof()
-        "-Wno-language-extension-token",
-      ]
-    } else {
-      cflags += [ "-pedantic" ]
-    }
-  }
-
   if (!is_clang && is_win) {
     # Dawn extends wgpu enums with internal enums.
     # MSVC considers these invalid switch values. crbug.com/dawn/397.
@@ -220,7 +159,6 @@ if (is_win || is_linux || is_chromeos || is_mac || is_fuchsia || is_android ||
       "Algebra.h",
       "AlignedAlloc.cpp",
       "AlignedAlloc.h",
-      "Alloc.h",
       "Atomic.h",
       "BitSetRangeIterator.h",
       "ColorSpace.h",
@@ -245,6 +183,8 @@ if (is_win || is_linux || is_chromeos || is_mac || is_fuchsia || is_android ||
       "MatchVariant.h",
       "Math.cpp",
       "Math.h",
+      "MemoryBlockAllocator.cpp",
+      "MemoryBlockAllocator.h",
       "Mutex.h",
       "MutexProtected.h",
       "NSRef.h",
@@ -270,6 +210,8 @@ if (is_win || is_linux || is_chromeos || is_mac || is_fuchsia || is_android ||
       "StringViewUtils.cpp",
       "StringViewUtils.h",
       "Strings.h",
+      "SystemHandle.cpp",
+      "SystemHandle.h",
       "SystemUtils.cpp",
       "SystemUtils.h",
       "ThreadLocal.cpp",
@@ -283,7 +225,6 @@ if (is_win || is_linux || is_chromeos || is_mac || is_fuchsia || is_android ||
       "egl_platform.h",
       "ityp_array.h",
       "ityp_bitset.h",
-      "ityp_span.h",
       "ityp_stack_vec.h",
       "ityp_vector.h",
       "vulkan_platform.h",
@@ -303,7 +244,7 @@ if (is_win || is_linux || is_chromeos || is_mac || is_fuchsia || is_android ||
     public_deps = [
       ":dawn_gpu_info_gen",
       ":dawn_version_gen",
-      "${dawn_root}:abseil",
+      "${dawn_abseil_dir}:absl",
       "${dawn_root}/src/dawn/partition_alloc:raw_ptr",
       "${dawn_root}/src/utils",
     ]

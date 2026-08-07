@@ -25,6 +25,8 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+#include "src/utils/span.h"
+
 #ifdef UNSAFE_BUFFERS_BUILD
 // TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
 #pragma allow_unsafe_buffers
@@ -67,7 +69,7 @@ struct Color {
     // Get representation of one component.
     T GetCompRep(size_t idx) const { return components[idx]; }
 
-    T components[NumComponents] = {};
+    std::array<T, NumComponents> components = {};
 };
 
 template <size_t NumComponents>
@@ -100,9 +102,9 @@ class ColorExpectation : public detail::CustomTextureExpectation {
     static constexpr size_t kNumComponents = ColorType::kNumComponents;
     using CompRepType = ColorType::ComponentRepresentation;
 
-    ColorExpectation(const ColorType* expected, size_t count, CompRepType tolerance)
+    ColorExpectation(dawn::Span<const ColorType> expected, CompRepType tolerance)
         : mTolerance(tolerance) {
-        mExpected.assign(expected, expected + count);
+        mExpected.assign(expected.begin(), expected.end());
     }
 
     uint32_t DataSize() override { return ColorType::kDataSize; }
@@ -233,11 +235,24 @@ class CopyTests {
         const utils::TextureDataCopyLayout& layout) {
         // These are some known 16 bit float values that always unpack and pack to the same bytes.
         // Pick test data from these values to provide some level of test coverage for *16Float.
-        constexpr uint8_t goodBytes[] = {
-            0x30, 0x00, 0x49, 0x00, 0x56, 0x40, 0x20, 0x00, 0x37, 0x4C, 0x42, 0x00, 0x3F, 0x6C,
-        };
+        constexpr auto goodBytes = std::to_array<uint8_t>({
+            0x30,
+            0x00,
+            0x49,
+            0x00,
+            0x56,
+            0x40,
+            0x20,
+            0x00,
+            0x37,
+            0x4C,
+            0x42,
+            0x00,
+            0x3F,
+            0x6C,
+        });
         constexpr uint32_t formatByteSize = 2;
-        constexpr uint32_t numGoodValues = sizeof(goodBytes) / sizeof(uint8_t) / formatByteSize;
+        constexpr uint32_t numGoodValues = goodBytes.size() / sizeof(uint8_t) / formatByteSize;
 
         uint32_t bytesPerTexelBlock = layout.bytesPerRow / layout.texelBlocksPerRow;
         std::vector<uint8_t> textureData(layout.byteLength);
@@ -264,12 +279,12 @@ class CopyTests {
         // These are some known 4-byte RGB9E5Ufloat values that always unpack and pack to the same
         // bytes. Pick test data from these values to provide some level of test coverage for
         // RGB9E5Ufloat.
-        constexpr uint8_t goodBytes[] = {
-            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E,
-            0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C,
-            0x1D, 0x1E, 0x1F, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28};
+        constexpr auto goodBytes = std::to_array<uint8_t>(
+            {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E,
+             0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C,
+             0x1D, 0x1E, 0x1F, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28});
         constexpr uint32_t formatByteSize = 4;
-        constexpr uint32_t numGoodValues = sizeof(goodBytes) / sizeof(uint8_t) / formatByteSize;
+        constexpr uint32_t numGoodValues = goodBytes.size() / sizeof(uint8_t) / formatByteSize;
         uint32_t bytesPerTexelBlock = layout.bytesPerRow / layout.texelBlocksPerRow;
         std::vector<uint8_t> textureData(layout.byteLength);
         for (uint32_t layer = 0; layer < layout.mipSize.depthOrArrayLayers; ++layer) {
@@ -296,12 +311,13 @@ class CopyTests {
         // These are some known 4-byte RG11B10Ufloat values that always unpack and pack to the same
         // bytes. Pick test data from these values to provide some level of test coverage for
         // RG11B10Ufloat.
-        constexpr uint8_t goodBytes[] = {
+        constexpr auto goodBytes = std::to_array<uint8_t>({
             0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E,
             0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C,
-            0x1D, 0x1E, 0x1F, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28};
+            0x1D, 0x1E, 0x1F, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28,
+        });
         constexpr uint32_t formatByteSize = 4;
-        constexpr uint32_t numGoodValues = sizeof(goodBytes) / sizeof(uint8_t) / formatByteSize;
+        constexpr uint32_t numGoodValues = goodBytes.size() / formatByteSize;
         uint32_t bytesPerTexelBlock = layout.bytesPerRow / layout.texelBlocksPerRow;
         std::vector<uint8_t> textureData(layout.byteLength);
         for (uint32_t layer = 0; layer < layout.mipSize.depthOrArrayLayers; ++layer) {
@@ -367,9 +383,11 @@ class CopyTests {
             uint32_t srcDepthOffset = z * srcBytesPerRow * srcRowsPerImage;
             uint32_t dstDepthOffset = z * dstBytesPerRow * dstRowsPerImage;
             for (unsigned int y = 0; y < heightInBlocks; ++y) {
-                memcpy(static_cast<uint8_t*>(dstData) + dstDepthOffset + y * dstBytesPerRow,
-                       static_cast<const uint8_t*>(srcData) + srcDepthOffset + y * srcBytesPerRow,
-                       widthInBlocks * bytesPerTexelBlock);
+                memcpy(static_cast<uint8_t*>(dstData) + dstDepthOffset +
+                           static_cast<size_t>(y) * dstBytesPerRow,
+                       static_cast<const uint8_t*>(srcData) + srcDepthOffset +
+                           static_cast<size_t>(y) * srcBytesPerRow,
+                       static_cast<size_t>(widthInBlocks) * bytesPerTexelBlock);
             }
         }
     }
@@ -638,7 +656,7 @@ class CopyTests_T2B : public CopyTests_WithFormatParam {
                     << errorMsgSs.str();
             }
 
-            bufferOffset += bufferSpec.bytesPerRow * bufferSpec.rowsPerImage;
+            bufferOffset += static_cast<uint64_t>(bufferSpec.bytesPerRow) * bufferSpec.rowsPerImage;
         }
 
         if (useMappableBuffer) {
@@ -788,8 +806,9 @@ class CopyTests_B2T : public CopyTests_WithFormatParam {
                             copySize.width * bytesPerTexel, copySize.height);
 
             EXPECT_TEXTURE_EQ(
-                new ColorExpectation<PixelType>(
-                    expected.data(), copySize.width * copySize.height * copyDepth, tolerance),
+                new ColorExpectation<PixelType>(dawn::Span<const PixelType>(expected).first(
+                                                    copySize.width * copySize.height * copyDepth),
+                                                tolerance),
                 texture,
                 {textureSpec.copyOrigin.x, textureSpec.copyOrigin.y,
                  textureSpec.copyOrigin.z + layer},
@@ -968,7 +987,7 @@ class CopyTests_T2TBase : public CopyTests, public Parent {
                 // slice)-th layer to its expected data after the copy (the outputBuffer contains
                 // the data of the destination texture since the dstSpec.copyOrigin.z-th layer).
                 uint64_t outputBufferExpectationBytesOffset =
-                    dstDataCopyLayout.bytesPerImage * slice;
+                    static_cast<uint64_t>(dstDataCopyLayout.bytesPerImage) * slice;
                 EXPECT_BUFFER_U32_RANGE_EQ(
                     reinterpret_cast<const uint32_t*>(expectedDstDataPerSlice.data()), outputBuffer,
                     outputBufferExpectationBytesOffset,
@@ -1374,7 +1393,7 @@ TEST_P(CopyTests_T2B, OffsetBufferAligned) {
 
     for (unsigned int i = 0; i < 3; ++i) {
         BufferSpec bufferSpec = MinimumBufferSpec(kWidth, kHeight);
-        uint64_t offset = 512 * i;
+        uint64_t offset = 512ULL * i;
         bufferSpec.size += offset;
         bufferSpec.offset += offset;
         DoTest(textureSpec, bufferSpec, {kWidth, kHeight, 1});
@@ -1583,7 +1602,7 @@ TEST_P(CopyTests_T2B, BytesPerRowAligned) {
     BufferSpec bufferSpec = MinimumBufferSpec(kWidth, kHeight);
     for (unsigned int i = 1; i < 4; ++i) {
         bufferSpec.bytesPerRow += 256;
-        bufferSpec.size += 256 * kHeight;
+        bufferSpec.size += 256ULL * kHeight;
         DoTest(textureSpec, bufferSpec, {kWidth, kHeight, 1});
     }
 }
@@ -1602,7 +1621,7 @@ TEST_P(CopyTests_T2B, BytesPerRowUnaligned) {
     BufferSpec bufferSpec = MinimumBufferSpec(kWidth, kHeight);
     for (unsigned int i = 1; i < 4; ++i) {
         bufferSpec.bytesPerRow += 256;
-        bufferSpec.size += 256 * kHeight;
+        bufferSpec.size += 256ULL * kHeight;
         DoTest(textureSpec, bufferSpec, {kWidth, kHeight, 1});
     }
 }
@@ -2597,7 +2616,7 @@ TEST_P(CopyTests_B2T, OffsetBufferAligned) {
 
     for (unsigned int i = 0; i < 3; ++i) {
         BufferSpec bufferSpec = MinimumBufferSpec(kWidth, kHeight);
-        uint64_t offset = 512 * i;
+        uint64_t offset = 512ULL * i;
         bufferSpec.size += offset;
         bufferSpec.offset += offset;
         DoTest(textureSpec, bufferSpec, {kWidth, kHeight, 1});
@@ -2666,7 +2685,7 @@ TEST_P(CopyTests_B2T, BytesPerRowAligned) {
     BufferSpec bufferSpec = MinimumBufferSpec(kWidth, kHeight);
     for (unsigned int i = 1; i < 4; ++i) {
         bufferSpec.bytesPerRow += 256;
-        bufferSpec.size += 256 * kHeight;
+        bufferSpec.size += 256ULL * kHeight;
         DoTest(textureSpec, bufferSpec, {kWidth, kHeight, 1});
     }
 }
@@ -2685,7 +2704,7 @@ TEST_P(CopyTests_B2T, BytesPerRowUnaligned) {
     BufferSpec bufferSpec = MinimumBufferSpec(kWidth, kHeight);
     for (unsigned int i = 1; i < 4; ++i) {
         bufferSpec.bytesPerRow += 256;
-        bufferSpec.size += 256 * kHeight;
+        bufferSpec.size += 256ULL * kHeight;
         DoTest(textureSpec, bufferSpec, {kWidth, kHeight, 1});
     }
 }
@@ -4201,7 +4220,7 @@ TEST_P(CopyTests_MemoryLeak, T2BLeakUninitializedPadding) {
     // Dirty the GPU heap with a recognizable pattern.
     // Use a large enough size to likely hit the same heap as the upcoming temporary buffer.
     {
-        constexpr uint64_t kDirtySize = 64 * 1024;
+        constexpr uint64_t kDirtySize = 64ULL * 1024;
         constexpr uint32_t kPattern = 0xDEADBEEF;
 
         wgpu::BufferDescriptor descriptor;

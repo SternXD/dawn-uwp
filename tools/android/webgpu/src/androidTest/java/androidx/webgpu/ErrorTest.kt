@@ -22,7 +22,6 @@ import androidx.webgpu.helper.createWebGpu
 import java.util.concurrent.Executors
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExecutorCoroutineDispatcher
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
@@ -53,7 +52,7 @@ class ErrorTest {
         webGpu.processEventsLoop()
       }
       try {
-        webGpu.execute {
+        val unused = webGpu.execute {
           assertThrows(ValidationException::class.java) {
             device.createTexture(
               GPUTextureDescriptor(

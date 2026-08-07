@@ -30,6 +30,7 @@
 #pragma allow_unsafe_buffers
 #endif
 
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <functional>
@@ -627,9 +628,10 @@ TEST_P(MultithreadTests, T2BThenMapInParallel) {
     constexpr uint32_t kTextureSize = 512;
     constexpr wgpu::TextureFormat kTextureFormat = wgpu::TextureFormat::RGBA8Unorm;
     constexpr uint32_t kBytesPerPixel = 4;
-    constexpr uint64_t kBufferSize = kTextureSize * kTextureSize * kBytesPerPixel;
+    constexpr uint64_t kBufferSize =
+        static_cast<uint64_t>(kTextureSize) * kTextureSize * kBytesPerPixel;
 
-    std::vector<utils::RGBA8> textureData(kTextureSize * kTextureSize);
+    std::vector<utils::RGBA8> textureData(static_cast<size_t>(kTextureSize) * kTextureSize);
     for (uint32_t y = 0; y < kTextureSize; ++y) {
         for (uint32_t x = 0; x < kTextureSize; ++x) {
             textureData[y * kTextureSize + x] =
@@ -1098,7 +1100,7 @@ TEST_P(MultithreadTests, DestroyTextureAndViewsAtSameTime) {
         texDescriptor.sampleCount = 1;
 
         wgpu::Texture texture = device.CreateTexture(&texDescriptor);
-        wgpu::TextureView textureViews[kNumViews];
+        std::array<wgpu::TextureView, kNumViews> textureViews;
 
         for (uint32_t i = 0; i < kNumViews; ++i) {
             wgpu::TextureViewDescriptor viewDescriptor = {};
@@ -1612,7 +1614,8 @@ TEST_P(MultithreadTextureCopyTests, CopyDepthToDepthNoRace) {
 
     std::vector<uint16_t> kExpectedData16(kExpectedData32.size());
     for (size_t i = 0; i < kExpectedData32.size(); ++i) {
-        kExpectedData16[i] = kExpectedData32[i] * std::numeric_limits<uint16_t>::max();
+        kExpectedData16[i] =
+            static_cast<uint16_t>(kExpectedData32[i] * std::numeric_limits<uint16_t>::max());
     }
 
     const size_t kExpectedDataSize16 = kExpectedData16.size() * sizeof(kExpectedData16[0]);
@@ -1680,7 +1683,8 @@ TEST_P(MultithreadTextureCopyTests, CopyBufferToDepthNoRace) {
 
     std::vector<uint16_t> kExpectedData16(kExpectedData32.size());
     for (size_t i = 0; i < kExpectedData32.size(); ++i) {
-        kExpectedData16[i] = kExpectedData32[i] * std::numeric_limits<uint16_t>::max();
+        kExpectedData16[i] =
+            static_cast<uint16_t>(kExpectedData32[i] * std::numeric_limits<uint16_t>::max());
     }
 
     const uint32_t kExpectedDataSize16 = kExpectedData16.size() * sizeof(kExpectedData16[0]);
@@ -2182,6 +2186,9 @@ TEST_P(MultithreadTimestampQueryTests, ResolveQuerySets_InParallel) {
 
     // TODO(crbug.com/451389800): [Capture] implement query set.
     DAWN_SUPPRESS_TEST_IF(IsCaptureReplayCheckingEnabled());
+
+    // TODO (530541262): Investigate failure on macOS 26 M2.
+    DAWN_SUPPRESS_TEST_IF(IsMetal() && IsApple());
 
     constexpr uint32_t kQueryCount = 2;
     constexpr uint32_t kNumThreads = 10;

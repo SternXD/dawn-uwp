@@ -32,7 +32,7 @@
 
 {% if 'dawn' in enabled_tags %}
     #ifdef __EMSCRIPTEN__
-    #error "Do not include this header. Emscripten already provides headers needed for {{metadata.api}}."
+    #error "Do not include this header. Use the headers provided by Emdawnwebgpu instead."
     #endif
 {% endif %}
 
@@ -136,11 +136,10 @@ namespace {{metadata.namespace}} {
 class {{BoolCppType}} {
   public:
     constexpr {{BoolCppType}}() = default;
-    // NOLINTNEXTLINE(runtime/explicit) allow implicit construction
-    constexpr {{BoolCppType}}(bool value) : mValue(static_cast<{{BoolCType}}>(value)) {}
-    // NOLINTNEXTLINE(runtime/explicit) allow implicit construction
-    {{BoolCppType}}({{BoolCType}} value): mValue(value) {}
+    explicit(false) constexpr {{BoolCppType}}(bool value) : mValue(static_cast<{{BoolCType}}>(value)) {}
+    explicit(false) {{BoolCppType}}({{BoolCType}} value): mValue(value) {}
 
+    // NOLINTNEXTLINE(google-explicit-constructor)
     constexpr operator bool() const { return static_cast<bool>(mValue); }
 
   private:
@@ -157,13 +156,10 @@ class {{BoolCppType}} {
 class {{OptionalBoolCppType}} {
   public:
     constexpr {{OptionalBoolCppType}}() = default;
-    // NOLINTNEXTLINE(runtime/explicit) allow implicit construction
-    constexpr {{OptionalBoolCppType}}(bool value) : mValue(static_cast<{{OptionalBoolCType}}>(value)) {}
-    // NOLINTNEXTLINE(runtime/explicit) allow implicit construction
-    constexpr {{OptionalBoolCppType}}(std::optional<bool> value) :
+    explicit(false) constexpr {{OptionalBoolCppType}}(bool value) : mValue(static_cast<{{OptionalBoolCType}}>(value)) {}
+    explicit(false) constexpr {{OptionalBoolCppType}}(std::optional<bool> value) :
         mValue(value ? static_cast<{{OptionalBoolCType}}>(*value) : {{OptionalBoolUndefined}}) {}
-    // NOLINTNEXTLINE(runtime/explicit) allow implicit construction
-    constexpr {{OptionalBoolCppType}}({{OptionalBoolCType}} value): mValue(value) {}
+    explicit(false) constexpr {{OptionalBoolCppType}}({{OptionalBoolCType}} value): mValue(value) {}
 
     // Define the values that are equivalent to the enums.
     {% for value in OptionalBool.values %}
@@ -185,7 +181,9 @@ class {{OptionalBoolCppType}} {
     }
 
     // Conversion functions.
+    // NOLINTNEXTLINE(google-explicit-constructor)
     operator {{OptionalBoolCType}}() const { return mValue; }
+    // NOLINTNEXTLINE(google-explicit-constructor)
     operator std::optional<bool>() const {
         if (mValue == {{OptionalBoolUndefined}}) {
             return std::nullopt;
@@ -214,13 +212,12 @@ class {{OptionalBoolCppType}} {
 // Used while callers switch to checking the Status enum instead of booleans.
 // TODO(crbug.com/42241199): Remove when all callers check the enum.
 struct ConvertibleStatus {
-    // NOLINTNEXTLINE(runtime/explicit) allow implicit construction
-    constexpr ConvertibleStatus(Status status) : status(status) {}
-    // NOLINTNEXTLINE(runtime/explicit) allow implicit conversion
+    explicit(false) constexpr ConvertibleStatus(Status status) : status(status) {}
+    // NOLINTNEXTLINE(google-explicit-constructor)
     constexpr operator bool() const {
         return status == Status::Success;
     }
-    // NOLINTNEXTLINE(runtime/explicit) allow implicit conversion
+    // NOLINTNEXTLINE(google-explicit-constructor)
     constexpr operator Status() const {
         return status;
     }
@@ -231,7 +228,7 @@ template<typename Derived, typename CType>
 class ObjectBase {
   public:
     ObjectBase() = default;
-    ObjectBase(CType handle): mHandle(handle) {
+    explicit(false) ObjectBase(CType handle): mHandle(handle) {
         if (mHandle) Derived::{{c_prefix}}AddRef(mHandle);
     }
     ~ObjectBase() {
@@ -253,19 +250,19 @@ class ObjectBase {
 
     ObjectBase(ObjectBase&& other) {
         mHandle = other.mHandle;
-        other.mHandle = 0;
+        other.mHandle = nullptr;
     }
     Derived& operator=(ObjectBase&& other) {
         if (&other != this) {
             if (mHandle) Derived::{{c_prefix}}Release(mHandle);
             mHandle = other.mHandle;
-            other.mHandle = 0;
+            other.mHandle = nullptr;
         }
 
         return static_cast<Derived&>(*this);
     }
 
-    ObjectBase(std::nullptr_t) {}
+    explicit(false) ObjectBase(std::nullptr_t) {}
     Derived& operator=(std::nullptr_t) {
         if (mHandle != nullptr) {
             Derived::{{c_prefix}}Release(mHandle);
@@ -289,7 +286,7 @@ class ObjectBase {
     }
     CType MoveToCHandle() {
         CType result = mHandle;
-        mHandle = 0;
+        mHandle = nullptr;
         return result;
     }
     static Derived Acquire(CType handle) {
@@ -429,20 +426,11 @@ class ObjectBase {
     struct {{as_cppType(type.name)}};
 {% endfor %}
 
-// TODO(42241188): Remove once all clients use StringView versions of the callbacks.
-// To make MSVC happy we need a StringView constructor from the adapter, so we first need to
-// forward declare StringViewAdapter here. Otherwise MSVC complains about an ambiguous conversion.
-namespace detail {
-    struct StringViewAdapter;
-}  // namespace detail
-
 struct StringView {
     char const * data = nullptr;
     size_t length = WGPU_STRLEN;
 
     {{wgpu_string_members("StringView") | indent(4)}}
-
-    StringView(const detail::StringViewAdapter& s);
 };
 
 namespace detail {
@@ -454,32 +442,7 @@ template <typename T>
 inline T& AsNonConstReference(const T& value) {
     return const_cast<T&>(value);
 }
-
-// A wrapper around StringView that can be implicitly converted to const char* with temporary
-// storage that adds the \0 for output strings that are all explicitly-sized.
-// TODO(42241188): Remove once all clients use StringView versions of the callbacks.
-struct StringViewAdapter {
-    WGPUStringView sv;
-    char* nullTerminated = nullptr;
-
-    StringViewAdapter(WGPUStringView sv) : sv(sv) {}
-    ~StringViewAdapter() { delete[] nullTerminated; }
-    operator ::WGPUStringView() { return sv; }
-    operator StringView() { return {sv.data, sv.length}; }
-    operator const char*() {
-        assert(sv.length != WGPU_STRLEN);
-        assert(nullTerminated == nullptr);
-        nullTerminated = new char[sv.length + 1];
-        for (size_t i = 0; i < sv.length; i++) {
-            nullTerminated[i] = sv.data[i];
-        }
-        nullTerminated[sv.length] = 0;
-        return nullTerminated;
-    }
-};
 }  // namespace detail
-
-inline StringView::StringView(const detail::StringViewAdapter& s): data(s.sv.data), length(s.sv.length) {}
 
 namespace detail {
 // For callbacks, we support two modes:
@@ -499,6 +462,20 @@ template <typename R, typename... Args, typename T>
 struct CallbackTypeBase<R, std::tuple<Args...>, T> {
     using Callback = R (Args..., T);
 };
+
+// Noexcept specializations of CallbackTypeBase.
+template <typename R, typename... Args>
+struct CallbackTypeBase<R, std::tuple<Args...>, std::true_type> {
+    using Callback = R (Args...) noexcept;
+};
+template <typename R, typename... Args>
+struct CallbackTypeBase<R, std::tuple<Args...>, void, std::true_type> {
+    using Callback = R (Args...) noexcept;
+};
+template <typename R, typename... Args, typename T>
+struct CallbackTypeBase<R, std::tuple<Args...>, T, std::true_type> {
+    using Callback = R (Args..., T) noexcept;
+};
 }  // namespace detail
 
 //* Special callbacks that require some custom code generation.
@@ -506,7 +483,7 @@ struct CallbackTypeBase<R, std::tuple<Args...>, T> {
 
 {% for type in by_category["callback function"] if type.name.get() not in SpecialCallbacks %}
     template <typename... T>
-    using {{as_cppType(type.name)}} = typename detail::CallbackTypeBase<
+    using {{as_cppType(type.name)}} = detail::CallbackTypeBase<
         {{as_cppType(type.returns.type.name) if type.returns else "void"}},
         std::tuple<
         {%- for arg in type.arguments -%}
@@ -516,9 +493,9 @@ struct CallbackTypeBase<R, std::tuple<Args...>, T> {
     >, T...>::Callback;
 {% endfor %}
 template <typename... T>
-using DeviceLostCallback = typename detail::CallbackTypeBase<void, std::tuple<const Device&, DeviceLostReason, StringView>, T...>::Callback;
+using DeviceLostCallback = detail::CallbackTypeBase<void, std::tuple<const Device&, DeviceLostReason, StringView>, T...>::Callback;
 template <typename... T>
-using UncapturedErrorCallback = typename detail::CallbackTypeBase<void, std::tuple<const Device&, ErrorType, StringView>, T...>::Callback;
+using UncapturedErrorCallback = detail::CallbackTypeBase<void, std::tuple<const Device&, ErrorType, StringView>, T...>::Callback;
 
 {%- macro render_cpp_callback_info_method_impl(type, method, typed, const) %}
     {{render_cpp_callback_info_method_declaration(type, method, typed=typed, const=const, dfn=True)}} {
@@ -666,6 +643,8 @@ static_assert(offsetof(ChainedStruct, sType) == offsetof({{c_prefix}}ChainedStru
 //* Special structures that require some custom code generation.
 {% set SpecialStructures = ["string view"] %}
 
+// NOLINTBEGIN(bugprone-invalid-enum-default-initialization)
+
 {% for type in by_category["structure"] if type.name.get() not in SpecialStructures %}
     {% set CppType = as_cppType(type.name) %}
     {% set Out = "Out" if type.output else "" %}
@@ -704,7 +683,7 @@ static_assert(offsetof(ChainedStruct, sType) == offsetof({{c_prefix}}ChainedStru
         //* Init struct for designated initializers. For chained types, this sets the sType.
         {% if type.chained or HasCallbackInfo %}
             struct Init;
-            inline {{CppType}}(Init&& init);
+            explicit(false) inline {{CppType}}(Init&& init);
         {% endif %}
         {% if type.has_free_members_function %}
             inline ~{{CppType}}();
@@ -714,6 +693,7 @@ static_assert(offsetof(ChainedStruct, sType) == offsetof({{c_prefix}}ChainedStru
             inline {{CppType}}& operator=({{CppType}}&&);
         {% endif %}
         //* Provide a conversion operator to the underlying C struct type.
+        // NOLINTNEXTLINE(google-explicit-constructor)
         inline operator const {{as_cType(type.name)}}&() const noexcept;
 
         {% if HasCallbackInfo %}
@@ -737,6 +717,7 @@ static_assert(offsetof(ChainedStruct, sType) == offsetof({{c_prefix}}ChainedStru
     };
 
 {% endfor %}
+// NOLINTEND(bugprone-invalid-enum-default-initialization)
 
 // Callback info handling is generated and/or custom implemented here to convert the types between C and C++.
 namespace detail {
@@ -764,7 +745,20 @@ struct CppFTraitsImpl<CppFT, R(*)(CppArgs...), T> {
     static constexpr bool capturing = false;
 
     static constexpr size_t NumCppArgs = sizeof...(CppArgs);
-    using BaseArgsTuple = typename decltype([]<std::size_t... Is>(std::index_sequence<Is...>) {
+    using BaseArgsTuple = decltype([]<std::size_t... Is>(std::index_sequence<Is...>) {
+        return std::type_identity<std::tuple<std::tuple_element_t<Is, std::tuple<CppArgs...>>...>>{};
+    }(std::make_index_sequence<std::is_same_v<T, Untyped> ? NumCppArgs : NumCppArgs - 1>{})
+    )::type;
+};
+// Specialization for noexcept raw function pointers.
+template <typename CppFT, typename R, typename... CppArgs, typename T>
+struct CppFTraitsImpl<CppFT, R(*)(CppArgs...) noexcept, T> {
+    using PtrT = R(*)(CppArgs...) noexcept;
+    using ReturnT = R;
+    static constexpr bool capturing = false;
+
+    static constexpr size_t NumCppArgs = sizeof...(CppArgs);
+    using BaseArgsTuple = decltype([]<std::size_t... Is>(std::index_sequence<Is...>) {
         return std::type_identity<std::tuple<std::tuple_element_t<Is, std::tuple<CppArgs...>>...>>{};
     }(std::make_index_sequence<std::is_same_v<T, Untyped> ? NumCppArgs : NumCppArgs - 1>{})
     )::type;
@@ -777,7 +771,20 @@ struct CppFTraitsImpl<CppFT, R(C::*)(CppArgs...) const, T> {
     static constexpr bool capturing = !std::is_convertible_v<CppFT, PtrT>;
 
     static constexpr size_t NumCppArgs = sizeof...(CppArgs);
-    using BaseArgsTuple = typename decltype([]<std::size_t... Is>(std::index_sequence<Is...>) {
+    using BaseArgsTuple = decltype([]<std::size_t... Is>(std::index_sequence<Is...>) {
+        return std::type_identity<std::tuple<std::tuple_element_t<Is, std::tuple<CppArgs...>>...>>{};
+    }(std::make_index_sequence<std::is_same_v<T, Untyped> ? NumCppArgs : NumCppArgs - 1>{})
+    )::type;
+};
+// Specialization for noexcept member function pointers (noexcept lambdas);
+template <typename CppFT, typename R, typename C, typename... CppArgs, typename T>
+struct CppFTraitsImpl<CppFT, R(C::*)(CppArgs...) const noexcept, T> {
+    using PtrT = R(*)(CppArgs...) noexcept;
+    using ReturnT = R;
+    static constexpr bool capturing = !std::is_convertible_v<CppFT, PtrT>;
+
+    static constexpr size_t NumCppArgs = sizeof...(CppArgs);
+    using BaseArgsTuple = decltype([]<std::size_t... Is>(std::index_sequence<Is...>) {
         return std::type_identity<std::tuple<std::tuple_element_t<Is, std::tuple<CppArgs...>>...>>{};
     }(std::make_index_sequence<std::is_same_v<T, Untyped> ? NumCppArgs : NumCppArgs - 1>{})
     )::type;
@@ -787,6 +794,9 @@ struct CppFTraits : CppFTraitsImpl<CppFT, decltype(&CppFT::operator()), T> {};
 template <typename R, typename... CppArgs, typename T>
 struct CppFTraits<R(*)(CppArgs...), T> :
     CppFTraitsImpl<R(*)(CppArgs...), R(*)(CppArgs...), T> {};
+template <typename R, typename... CppArgs, typename T>
+struct CppFTraits<R(*)(CppArgs...) noexcept, T> :
+    CppFTraitsImpl<R(*)(CppArgs...) noexcept, R(*)(CppArgs...) noexcept, T> {};
 
 // CArgConverter are specialization structs that specialize a conversion from a C CallbackInfo's
 // callback argument types to a set of valid C++ types. These specializations provide us a way to
@@ -893,7 +903,7 @@ struct CallbackHelperImpl<R, CInfoT, CppF, std::tuple<CArgs...>, std::index_sequ
             std::unique_ptr<CppF> callback(reinterpret_cast<CppF*>(callbackParam));
             return std::apply(*callback, Converter::Convert(cArgs...));
         } else {
-            auto callback = reinterpret_cast<typename CppFTraits::PtrT>(callbackParam);
+            auto callback = reinterpret_cast<CppFTraits::PtrT>(callbackParam);
             return std::apply(callback, Converter::Convert(cArgs...));
         }
     }
@@ -908,7 +918,7 @@ struct CallbackHelperImpl<R, CInfoT, CppF, std::tuple<CArgs...>, std::index_sequ
         using CppFTraits = CppFTraits<CppF, T>;
         using Converter = CArgConverter<CInfoT, typename CppFTraits::BaseArgsTuple>;
 
-        auto callback = reinterpret_cast<typename CppFTraits::PtrT>(callbackParam);
+        auto callback = reinterpret_cast<CppFTraits::PtrT>(callbackParam);
         auto param = std::make_tuple(static_cast<T>(userdataParam));
         return std::apply(callback, std::tuple_cat(Converter::Convert(cArgs...), param));
     }
@@ -988,6 +998,7 @@ struct CallbackInfoHelper {
 // error: 'offsetof' within non-standard-layout type '{{metadata.namespace}}::XXX' is conditionally-supported
 #pragma GCC diagnostic ignored "-Winvalid-offsetof"
 #endif
+// NOLINTBEGIN(bugprone-invalid-enum-default-initialization)
 
 {% for type in by_category["structure"] if type.name.get() not in SpecialStructures %}
     {% set CppType = as_cppType(type.name) %}
@@ -1139,7 +1150,7 @@ struct CallbackInfoHelper {
     {% endfor %}
 
 {% endfor %}
-
+// NOLINTEND(bugprone-invalid-enum-default-initialization)
 #if defined(__GNUC__) || defined(__clang__)
 #pragma GCC diagnostic pop
 #endif
@@ -1192,7 +1203,7 @@ struct CallbackInfoHelper {
     {% endfor %}
     {% for type in by_category["callback function"] %}
         template <typename... T>
-        using {{as_cppType(type.name)}} = typename {{c_namespace.namespace_case()}}::{{as_cppType(type.name)}}<T...>;
+        using {{as_cppType(type.name)}} = {{c_namespace.namespace_case()}}::{{as_cppType(type.name)}}<T...>;
     {% endfor %}
 {% endif %}
 

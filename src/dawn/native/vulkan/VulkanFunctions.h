@@ -399,7 +399,7 @@ struct VulkanFunctions {
     VkFn<PFN_vkAcquireNextImageKHR> AcquireNextImageKHR = nullptr;
     VkFn<PFN_vkQueuePresentKHR> QueuePresentKHR = nullptr;
 
-#if VK_USE_PLATFORM_FUCHSIA
+#if defined(VK_USE_PLATFORM_FUCHSIA)
     // VK_FUCHSIA_external_memory
     VkFn<PFN_vkGetMemoryZirconHandleFUCHSIA> GetMemoryZirconHandleFUCHSIA = nullptr;
     VkFn<PFN_vkGetMemoryZirconHandlePropertiesFUCHSIA> GetMemoryZirconHandlePropertiesFUCHSIA =
@@ -419,6 +419,7 @@ class VkResult {
   public:
     constexpr static VkResult WrapUnsafe(::VkResult value) { return VkResult(value); }
 
+    // NOLINTNEXTLINE(google-explicit-constructor)
     constexpr operator ::VkResult() const { return mValue; }
 
   private:

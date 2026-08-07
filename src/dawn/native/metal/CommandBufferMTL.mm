@@ -72,6 +72,14 @@ MTLIndexType MTLIndexFormat(wgpu::IndexFormat format) {
     }
 }
 
+NSRef<NSString> NextNSString(CommandIterator* iter, size_t length) {
+    std::string_view s = NextNullTerminatedString(iter, length);
+    DAWN_ASSERT(s[s.length() - 1] == '\0');
+    return AcquireNSRef([[NSString alloc] initWithBytes:s.data()
+                                                 length:s.length() - 1
+                                               encoding:NSUTF8StringEncoding]);
+}
+
 template <typename PassDescriptor>
 class SampleBufferAttachment {
   public:
@@ -143,21 +151,21 @@ void SetSampleBufferAttachments(PassDescriptor* descriptor, BeginPass* cmd) {
     if (querySet == nullptr) {
         return;
     }
+    QuerySet* querySetMTL = ToBackend(querySet);
     SampleBufferAttachment<PassDescriptor> sampleBufferAttachment;
-    sampleBufferAttachment.SetSampleBuffer(descriptor,
-                                           ToBackend(querySet)->GetCounterSampleBuffer());
+    sampleBufferAttachment.SetSampleBuffer(descriptor, querySetMTL->GetCounterSampleBuffer());
 
     QueryIndex beginningOfPassWriteIndex = cmd->timestampWrites.beginningOfPassWriteIndex;
     sampleBufferAttachment.SetStartSampleIndex(
         descriptor, beginningOfPassWriteIndex != kQuerySetIndexUndefinedTyped
-                        ? NSUInteger{beginningOfPassWriteIndex}
+                        ? NSUInteger{querySetMTL->GetSampleIndex(beginningOfPassWriteIndex)}
                         : MTLCounterDontSample);
 
     QueryIndex endOfPassWriteIndex = cmd->timestampWrites.endOfPassWriteIndex;
-    sampleBufferAttachment.SetEndSampleIndex(descriptor,
-                                             endOfPassWriteIndex != kQuerySetIndexUndefinedTyped
-                                                 ? NSUInteger{endOfPassWriteIndex}
-                                                 : MTLCounterDontSample);
+    sampleBufferAttachment.SetEndSampleIndex(
+        descriptor, endOfPassWriteIndex != kQuerySetIndexUndefinedTyped
+                        ? NSUInteger{querySetMTL->GetSampleIndex(endOfPassWriteIndex)}
+                        : MTLCounterDontSample);
 }
 
 NSRef<MTLComputePassDescriptor> CreateMTLComputePassDescriptor(BeginComputePassCmd* computePass) {
@@ -279,7 +287,7 @@ NSRef<MTLRenderPassDescriptor> CreateMTLRenderPassDescriptor(
             switch (attachmentInfo.depthLoadOp) {
                 case wgpu::LoadOp::Clear:
                     descriptor.depthAttachment.loadAction = MTLLoadActionClear;
-                    descriptor.depthAttachment.clearDepth = attachmentInfo.clearDepth;
+                    descriptor.depthAttachment.clearDepth = double{attachmentInfo.clearDepth};
                     break;
 
                 case wgpu::LoadOp::Load:
@@ -428,10 +436,11 @@ void EncodeEmptyBlitEncoderForWriteTimestamp(Device* device,
     auto scopedDescriptor = AcquireNSRef([[MTLBlitPassDescriptor alloc] init]);
     MTLBlitPassDescriptor* descriptor = scopedDescriptor.Get();
     if (cmd->querySet.Get() != nullptr) {
-        descriptor.sampleBufferAttachments[0].sampleBuffer =
-            ToBackend(cmd->querySet.Get())->GetCounterSampleBuffer();
+        QuerySet* querySet = ToBackend(cmd->querySet.Get());
+        descriptor.sampleBufferAttachments[0].sampleBuffer = querySet->GetCounterSampleBuffer();
         descriptor.sampleBufferAttachments[0].startOfEncoderSampleIndex = MTLCounterDontSample;
-        descriptor.sampleBufferAttachments[0].endOfEncoderSampleIndex = NSUInteger(cmd->queryIndex);
+        descriptor.sampleBufferAttachments[0].endOfEncoderSampleIndex =
+            NSUInteger(querySet->GetSampleIndex(cmd->queryIndex));
 
         id<MTLBlitCommandEncoder> blit = commandContext->BeginBlit(descriptor);
         if (device->IsToggleEnabled(Toggle::MetalUseMockBlitEncoderForWriteTimestamp)) {
@@ -441,13 +450,8 @@ void EncodeEmptyBlitEncoderForWriteTimestamp(Device* device,
     }
 }
 
-// Metal uses a physical addressing mode which means buffers in the shading language are
-// just pointers to the virtual address of their start. This means there is no way to know
-// the length of a buffer to compute the arrayLength() of unsized arrays at the end of storage
-// buffers. Tint implements the arrayLength() of unsized arrays by requiring immediates
-// that stores the length of other buffers. This structure that keeps track of the
-// length of storage buffers and apply them to the reserved "immediate blocks" when
-// needed for a draw or a dispatch.
+// Metal buffer pointers do not expose their length, so Tint receives storage buffer lengths
+// through immediate data for arrayLength().
 struct StorageBufferLengthTracker {
     StorageBufferLengthTracker() = delete;
     explicit StorageBufferLengthTracker(DeviceBase* device) {
@@ -457,21 +461,16 @@ struct StorageBufferLengthTracker {
 
     wgpu::ShaderStage dirtyStages = wgpu::ShaderStage::None;
 
-    // The lengths of buffers are stored as 32bit integers because that is the width the
-    // MSL code generated by Tint expects.
-    // UBOs require we align the max buffer count to 4 elements (16 bytes).
-    static constexpr size_t MaxBufferCount = ((kGenericMetalBufferSlots + 3) / 4) * 4;
+    // Tint expects one uint32_t length per possible buffer binding.
+    static constexpr size_t MaxBufferCount = kGenericMetalBufferSlots;
     PerStage<std::array<uint32_t, MaxBufferCount>> data;
-    // The actual size in bytes of the buffer length data to upload for each shader stage.
-    // This is calculated as sizeof(uint32_t) * aligned_buffer_count and represents the
-    // number of bytes that need to be uploaded to the GPU buffer containing buffer lengths.
-    // This size accounts for the 4-element (16-byte) alignment requirement for UBOs.
+    // Number of bytes to upload for each shader stage.
     PerStage<uint32_t> dataSize;
 
     // TODO(crbug.com/366291600): Remove this logic when merging
     // StorageBufferLengthTracker in ImmediateTracker.
     void OnSetPipeline(RenderPipelineBase* pipeline) {
-        uint32_t immediateCount = pipeline->GetImmediateMask().count();
+        size_t immediateCount = pipeline->GetImmediateMask().count();
         if (immediateCount != mLastImmediateCounts) {
             mLastImmediateCounts = immediateCount;
             dirtyStages |= (wgpu::ShaderStage::Vertex | wgpu::ShaderStage::Fragment);
@@ -479,7 +478,7 @@ struct StorageBufferLengthTracker {
     }
 
     void OnSetPipeline(ComputePipelineBase* pipeline) {
-        uint32_t immediateCount = pipeline->GetImmediateMask().count();
+        size_t immediateCount = pipeline->GetImmediateMask().count();
         if (immediateCount != mLastImmediateCounts) {
             mLastImmediateCounts = immediateCount;
             dirtyStages |= wgpu::ShaderStage::Compute;
@@ -494,18 +493,16 @@ struct StorageBufferLengthTracker {
                 ToBackend(pipeline->GetLayout())->GetBufferBindingCount(SingleShaderStage::Vertex);
 
             if (enableVertexPulling) {
-                bufferCount += pipeline->GetVertexBufferCount();
+                bufferCount += uint32_t{pipeline->GetVertexBufferCount()};
             }
 
-            bufferCount = Align(bufferCount, 4);
             DAWN_ASSERT(bufferCount <= data[SingleShaderStage::Vertex].size());
             dataSize[SingleShaderStage::Vertex] = sizeof(uint32_t) * bufferCount;
         }
 
         if (dirtyStages & wgpu::ShaderStage::Fragment) {
-            uint32_t bufferCount = Align(ToBackend(pipeline->GetLayout())
-                                             ->GetBufferBindingCount(SingleShaderStage::Fragment),
-                                         4);
+            uint32_t bufferCount = ToBackend(pipeline->GetLayout())
+                                       ->GetBufferBindingCount(SingleShaderStage::Fragment);
             DAWN_ASSERT(bufferCount <= data[SingleShaderStage::Fragment].size());
             dataSize[SingleShaderStage::Fragment] = sizeof(uint32_t) * bufferCount;
         }
@@ -518,13 +515,13 @@ struct StorageBufferLengthTracker {
             return;
         }
 
-        uint32_t bufferCount = Align(
-            ToBackend(pipeline->GetLayout())->GetBufferBindingCount(SingleShaderStage::Compute), 4);
+        uint32_t bufferCount =
+            ToBackend(pipeline->GetLayout())->GetBufferBindingCount(SingleShaderStage::Compute);
         DAWN_ASSERT(bufferCount <= data[SingleShaderStage::Compute].size());
         dataSize[SingleShaderStage::Compute] = sizeof(uint32_t) * bufferCount;
     }
 
-    uint32_t mLastImmediateCounts;
+    size_t mLastImmediateCounts = 0;
 };
 
 class RenderImmediatesTracker
@@ -543,11 +540,8 @@ class RenderImmediatesTracker
 
 using ComputeImmediatesTracker = UserImmediatesTrackerBase<ComputeImmediates, ComputePipelineBase>;
 
-// Template class that manages immediates for Metal backend.
-// This tracker combines immediate data with buffer length information,
-// uploading both to a single buffer that can be accessed by shaders.
-// Template parameter T should be either RenderImmediatesTrackerBase
-// or ComputeImmediatesTrackerBase.
+// Uploads immediates, both external and internal (including storage buffer lengths) through one
+// Metal setBytes call per stage.
 // TODO(crbug.com/366291600): Merge StorageBufferLength in ImmediateTracker
 template <typename T, typename EncoderType>
 class ImmediateTracker : public T {
@@ -571,31 +565,28 @@ class ImmediateTracker : public T {
         for (auto [offset, size] : IterateRanges(uploadBits)) {
             uint32_t immediateContentStartOffset =
                 static_cast<uint32_t>(offset) * kImmediateElementByteSize;
-            uint32_t immediateRangeStartOffset =
+            size_t immediateRangeStartOffset =
                 GetImmediateIndexInPipeline(static_cast<uint32_t>(offset), pipelineMask);
             WriteImmediateBlocks(stages, immediateRangeStartOffset,
                                  this->mContent.template Get<uint32_t>(immediateContentStartOffset),
                                  size * kImmediateElementByteSize);
         }
 
-        // Calculate buffer sizes start offset based on ImmediateBlock layouts
-        // describes in PipelineLayoutMTL.h
-        // - must be 16-byte aligned for UBO requirements
-        uint32_t bufferSizeOffset = RoundUp(pipelineMask.count() * kImmediateElementByteSize, 16);
+        uint32_t bufferSizeByteOffset = GetImmediateBufferSizesByteOffset(pipelineMask);
+        size_t bufferSizeOffsetElements = bufferSizeByteOffset / kImmediateElementByteSize;
 
         // Update storage buffer length data that are needed and changed.
         for (auto stage : IterateStages(lengthTracker->dirtyStages)) {
             // Sizes must be > 0, otherwise we'll do min(index, bufferSize - 1) and underflow.
             // TODO(crbug.com/488400770): Should be able to assert that, but Graphite violates it.
 
-            WriteImmediateBlocks(StageBit(stage), bufferSizeOffset / kImmediateElementByteSize,
+            WriteImmediateBlocks(StageBit(stage), bufferSizeOffsetElements,
                                  lengthTracker->data[stage].data(), lengthTracker->dataSize[stage]);
         }
 
-        // Update per stage dirty size. lengthTracker always keeps last valid length of buffer
-        // sizes.
         for (auto stage : IterateStages(stages)) {
-            dirtySize[stage] = bufferSizeOffset + lengthTracker->dataSize[stage];
+            dirtySize[stage] =
+                Align(bufferSizeByteOffset + lengthTracker->dataSize[stage], kSetBytesAlignment);
         }
 
         // Reset StorageBufferLengthTracker dirty stages
@@ -611,24 +602,30 @@ class ImmediateTracker : public T {
     static constexpr bool kIsRenderImmediates = std::is_same_v<T, RenderImmediatesTracker>;
     static constexpr bool kIsComputeImmediates = std::is_same_v<T, ComputeImmediatesTracker>;
 
-    // The lengths of buffers are stored as 32bit integers because that is the width the
-    // MSL code generated by Tint expects.
-    // UBOs require we align the max buffer count to 4 elements (16 bytes).
+    // Round up to 16 bytes so the setBytes length covers the size of the constant-buffer struct
+    // argument, whose size is rounded up to its largest member alignment (at most 16 bytes, for
+    // vec4-class members).
+    static constexpr size_t kSetBytesAlignment = 16;
+
     static constexpr size_t MaxBufferCount = StorageBufferLengthTracker::MaxBufferCount;
+    static constexpr size_t kImmediateStructU32 = kIsRenderImmediates
+                                                      ? sizeof(RenderImmediates) / sizeof(uint32_t)
+                                                      : sizeof(UserImmediates) / sizeof(uint32_t);
     static constexpr size_t kMaxImmediateBlockSize =
-        kIsRenderImmediates ? sizeof(RenderImmediates) / sizeof(uint32_t) + MaxBufferCount
-                            : sizeof(UserImmediates) / sizeof(uint32_t) + MaxBufferCount;
+        Align(kImmediateStructU32 + MaxBufferCount, kSetBytesAlignment / kImmediateElementByteSize);
 
     // Writes data to the immediate block content for the specified shader stages.
     // This is used for both immediates and storage buffer length data.
     void WriteImmediateBlocks(wgpu::ShaderStage stages,
-                              uint32_t offset,
+                              size_t offset,
                               const void* data,
                               size_t size) {
         DAWN_ASSERT(offset < kMaxImmediateBlockSize);
         DAWN_ASSERT(size <= sizeof(uint32_t) * (kMaxImmediateBlockSize - offset));
         // Copy data to all affected shader stages
         for (auto stage : IterateStages(stages)) {
+            // TODO(https://crbug.com/532946455): Spanify ImmediateTracker.
+            // TODO(https://crbug.com/524406299): Use Span::CopyFrom.
             DAWN_UNSAFE_TODO(std::memcpy(&mImmediateBlockContent[stage][offset], data, size));
         }
         dirtyStages |= stages;
@@ -695,7 +692,7 @@ class BindGroupTracker : public BindGroupTrackerBase<true> {
         uint32_t curBufferIdx = kArgumentBufferSlotMax;
         for (BindGroupIndex index : mDirtyBindGroupsObjectChangedOrIsDynamic) {
             BindGroup* group = ToBackend(mBindGroups[index]);
-            auto* layout = ToBackend(mPipelineLayout->GetBindGroupLayout(index));
+            auto* layout = ToBackend(mPipeline->GetLayout()->GetBindGroupLayout(index));
 
             // Note, both of these buffer index values need to match up to the value set in the
             // ShaderModuleMTL #argument-buffer-and-dynamic-offsets-buffer-indices
@@ -708,7 +705,8 @@ class BindGroupTracker : public BindGroupTrackerBase<true> {
             }
 
             ApplyBindGroup(encoder, index, group, GetDynamicOffsets(index),
-                           ToBackend(mPipelineLayout), argumentBufferIdx, dynamicOffsetsBufferIdx);
+                           ToBackend(mPipeline->GetLayout()), argumentBufferIdx,
+                           dynamicOffsetsBufferIdx);
         }
 
         AfterApply();
@@ -785,21 +783,19 @@ class BindGroupTracker : public BindGroupTrackerBase<true> {
                     const BufferBinding& binding = group->GetBindingAsBufferBinding(bindingIndex);
                     ToBackend(binding.buffer)->TrackUsage();
 
-                    // Check to make sure sizes will fit into uint32_t below.
-                    // TODO(crbug.com/488400770): Warnings for implicit narrowing below are missing.
-                    DAWN_ASSERT(binding.size <= std::numeric_limits<uint32_t>::max());
-
                     if (hasVertStage) {
-                        mLengthTracker->data[SingleShaderStage::Vertex][vertIndex] = binding.size;
+                        mLengthTracker->data[SingleShaderStage::Vertex][vertIndex] =
+                            checked_cast<uint32_t>(binding.size);
                         mLengthTracker->dirtyStages |= wgpu::ShaderStage::Vertex;
                     }
                     if (hasFragStage) {
-                        mLengthTracker->data[SingleShaderStage::Fragment][fragIndex] = binding.size;
+                        mLengthTracker->data[SingleShaderStage::Fragment][fragIndex] =
+                            checked_cast<uint32_t>(binding.size);
                         mLengthTracker->dirtyStages |= wgpu::ShaderStage::Fragment;
                     }
                     if (hasComputeStage) {
                         mLengthTracker->data[SingleShaderStage::Compute][computeIndex] =
-                            binding.size;
+                            checked_cast<uint32_t>(binding.size);
                         mLengthTracker->dirtyStages |= wgpu::ShaderStage::Compute;
                     }
 
@@ -1456,6 +1452,10 @@ MaybeError CommandBuffer::FillCommands(CommandRecordingContext* commandContext) 
 
             case Command::ResolveQuerySet: {
                 ResolveQuerySetCmd* cmd = mCommands.NextCommand<ResolveQuerySetCmd>();
+                if (cmd->queryCount == QueryIndex{0u}) {
+                    continue;
+                }
+
                 QuerySet* querySet = ToBackend(cmd->querySet.Get());
                 Buffer* destination = ToBackend(cmd->destination.Get());
 
@@ -1478,7 +1478,7 @@ MaybeError CommandBuffer::FillCommands(CommandRecordingContext* commandContext) 
                     }
                     [commandContext->EnsureBlit()
                           resolveCounters:querySet->GetCounterSampleBuffer()
-                                  inRange:NSMakeRange(uint32_t{cmd->firstQuery},
+                                  inRange:NSMakeRange(querySet->GetSampleIndex(cmd->firstQuery),
                                                       uint32_t{cmd->queryCount})
                         destinationBuffer:destination->GetMTLBuffer()
                         destinationOffset:NSUInteger(cmd->destinationOffset)];
@@ -1497,10 +1497,10 @@ MaybeError CommandBuffer::FillCommands(CommandRecordingContext* commandContext) 
 
                 } else {
                     DAWN_ASSERT(ToBackend(GetDevice())->UseCounterSamplingAtCommandBoundary());
+                    QuerySet* querySet = ToBackend(cmd->querySet.Get());
                     [commandContext->EnsureBlit()
-                        sampleCountersInBuffer:ToBackend(cmd->querySet.Get())
-                                                   ->GetCounterSampleBuffer()
-                                 atSampleIndex:NSUInteger(cmd->queryIndex)
+                        sampleCountersInBuffer:querySet->GetCounterSampleBuffer()
+                                 atSampleIndex:NSUInteger(querySet->GetSampleIndex(cmd->queryIndex))
                                    withBarrier:YES];
                 }
 
@@ -1522,31 +1522,31 @@ MaybeError CommandBuffer::FillCommands(CommandRecordingContext* commandContext) 
 
             case Command::PushDebugGroup: {
                 PushDebugGroupCmd* cmd = mCommands.NextCommand<PushDebugGroupCmd>();
-                char* label = mCommands.NextData<char>(cmd->length + 1);
-                NSRef<NSString> mtlLabel =
-                    AcquireNSRef([[NSString alloc] initWithUTF8String:label]);
-                [commandContext->GetCommands() pushDebugGroup:mtlLabel.Get()];
+                NSRef<NSString> label = NextNSString(&mCommands, cmd->length);
+                [commandContext->GetCommands() pushDebugGroup:label.Get()];
                 break;
             }
 
             case Command::WriteBuffer: {
                 WriteBufferCmd* write = mCommands.NextCommand<WriteBufferCmd>();
                 const uint64_t offset = write->offset;
-                const uint64_t size = write->size;
-                uint8_t* data = mCommands.NextData<uint8_t>(size);
+                Span<const uint8_t> data = mCommands.NextData<uint8_t>(write->size);
 
-                if (size == 0) {
+                if (data.empty()) {
                     continue;
                 }
 
                 Buffer* dstBuffer = ToBackend(write->buffer.Get());
                 Device* device = ToBackend(GetDevice());
 
+                // TODO(https://crbug.com/534203108): Spanify WithUploadReservation.
                 DAWN_TRY(device->GetDynamicUploader()->WithUploadReservation(
-                    size, kCopyBufferToBufferOffsetAlignment,
+                    data.size(), kCopyBufferToBufferOffsetAlignment,
                     [&](UploadReservation reservation) -> MaybeError {
-                        DAWN_UNSAFE_TODO(memcpy(reservation.mappedPointer, data, size));
-                        dstBuffer->EnsureDataInitializedAsDestination(commandContext, offset, size);
+                        DAWN_UNSAFE_TODO(
+                            memcpy(reservation.mappedPointer, data.data(), data.size()));
+                        dstBuffer->EnsureDataInitializedAsDestination(commandContext, offset,
+                                                                      data.size());
 
                         dstBuffer->TrackUsage();
                         [commandContext->EnsureBlit()
@@ -1554,7 +1554,7 @@ MaybeError CommandBuffer::FillCommands(CommandRecordingContext* commandContext) 
                                  sourceOffset:reservation.offsetInBuffer
                                      toBuffer:dstBuffer->GetMTLBuffer()
                             destinationOffset:offset
-                                         size:size];
+                                         size:data.size()];
                         return {};
                     }));
                 break;
@@ -1600,12 +1600,12 @@ MaybeError CommandBuffer::EncodeComputePass(CommandRecordingContext* commandCont
             kQuerySetIndexUndefinedTyped) {
             DAWN_ASSERT(ToBackend(GetDevice())->UseCounterSamplingAtCommandBoundary());
 
-            [encoder
-                sampleCountersInBuffer:ToBackend(computePassCmd->timestampWrites.querySet.Get())
-                                           ->GetCounterSampleBuffer()
-                         atSampleIndex:NSUInteger(computePassCmd->timestampWrites
-                                                      .beginningOfPassWriteIndex)
-                           withBarrier:YES];
+            QuerySet* querySet = ToBackend(computePassCmd->timestampWrites.querySet.Get());
+            [encoder sampleCountersInBuffer:querySet->GetCounterSampleBuffer()
+                              atSampleIndex:NSUInteger(querySet->GetSampleIndex(
+                                                computePassCmd->timestampWrites
+                                                    .beginningOfPassWriteIndex))
+                                withBarrier:YES];
         }
     }
     SetDebugName(GetDevice(), encoder, "Dawn_ComputePassEncoder", computePassCmd->label);
@@ -1624,13 +1624,12 @@ MaybeError CommandBuffer::EncodeComputePass(CommandRecordingContext* commandCont
                         kQuerySetIndexUndefinedTyped) {
                     DAWN_ASSERT(!ToBackend(GetDevice())->UseCounterSamplingAtStageBoundary());
 
-                    [encoder
-                        sampleCountersInBuffer:ToBackend(
-                                                   computePassCmd->timestampWrites.querySet.Get())
-                                                   ->GetCounterSampleBuffer()
-                                 atSampleIndex:NSUInteger(computePassCmd->timestampWrites
-                                                              .endOfPassWriteIndex)
-                                   withBarrier:YES];
+                    QuerySet* querySet = ToBackend(computePassCmd->timestampWrites.querySet.Get());
+                    [encoder sampleCountersInBuffer:querySet->GetCounterSampleBuffer()
+                                      atSampleIndex:NSUInteger(querySet->GetSampleIndex(
+                                                        computePassCmd->timestampWrites
+                                                            .endOfPassWriteIndex))
+                                        withBarrier:YES];
                 }
                 UpdateQueryAvailability(computePassCmd->timestampWrites);
 
@@ -1692,30 +1691,28 @@ MaybeError CommandBuffer::EncodeComputePass(CommandRecordingContext* commandCont
 
             case Command::SetBindGroup: {
                 SetBindGroupCmd* cmd = mCommands.NextCommand<SetBindGroupCmd>();
-                uint32_t* dynamicOffsets = nullptr;
-                if (cmd->dynamicOffsetCount > 0) {
+                ityp::span<BindingIndex, const uint32_t> dynamicOffsets;
+                if (cmd->dynamicOffsetCount != BindingIndex{0u}) {
                     dynamicOffsets = mCommands.NextData<uint32_t>(cmd->dynamicOffsetCount);
                 }
 
-                bindGroups.OnSetBindGroup(cmd->index, ToBackend(cmd->group.Get()),
-                                          cmd->dynamicOffsetCount, dynamicOffsets);
+                bindGroups.OnSetBindGroup(cmd->index, ToBackend(cmd->group.Get()), dynamicOffsets);
                 break;
             }
 
             case Command::SetImmediates: {
                 SetImmediatesCmd* cmd = mCommands.NextCommand<SetImmediatesCmd>();
                 DAWN_ASSERT(cmd->size > 0);
-                uint8_t* value = mCommands.NextData<uint8_t>(cmd->size);
-                immediates.SetImmediates(cmd->offset, value, cmd->size);
+                Span<const uint8_t> data = mCommands.NextData<uint8_t>(cmd->size);
+                // TODO(https://crbug.com/532946455): Spanify ImmediateTracker.
+                immediates.SetImmediates(cmd->offset, data.data(), data.size());
                 break;
             }
 
             case Command::InsertDebugMarker: {
                 InsertDebugMarkerCmd* cmd = mCommands.NextCommand<InsertDebugMarkerCmd>();
-                char* label = mCommands.NextData<char>(cmd->length + 1);
-                NSRef<NSString> mtlLabel =
-                    AcquireNSRef([[NSString alloc] initWithUTF8String:label]);
-                [encoder insertDebugSignpost:mtlLabel.Get()];
+                NSRef<NSString> label = NextNSString(&mCommands, cmd->length);
+                [encoder insertDebugSignpost:label.Get()];
                 break;
             }
 
@@ -1728,10 +1725,8 @@ MaybeError CommandBuffer::EncodeComputePass(CommandRecordingContext* commandCont
 
             case Command::PushDebugGroup: {
                 PushDebugGroupCmd* cmd = mCommands.NextCommand<PushDebugGroupCmd>();
-                char* label = mCommands.NextData<char>(cmd->length + 1);
-                NSRef<NSString> mtlLabel =
-                    AcquireNSRef([[NSString alloc] initWithUTF8String:label]);
-                [encoder pushDebugGroup:mtlLabel.Get()];
+                NSRef<NSString> label = NextNSString(&mCommands, cmd->length);
+                [encoder pushDebugGroup:label.Get()];
                 break;
             }
 
@@ -1739,9 +1734,10 @@ MaybeError CommandBuffer::EncodeComputePass(CommandRecordingContext* commandCont
                 WriteTimestampCmd* cmd = mCommands.NextCommand<WriteTimestampCmd>();
                 QuerySet* querySet = ToBackend(cmd->querySet.Get());
 
-                [encoder sampleCountersInBuffer:querySet->GetCounterSampleBuffer()
-                                  atSampleIndex:NSUInteger(cmd->queryIndex)
-                                    withBarrier:YES];
+                [encoder
+                    sampleCountersInBuffer:querySet->GetCounterSampleBuffer()
+                             atSampleIndex:NSUInteger(querySet->GetSampleIndex(cmd->queryIndex))
+                               withBarrier:YES];
 
                 UpdateQueryAvailability(cmd);
                 break;
@@ -1767,7 +1763,7 @@ MaybeError CommandBuffer::EncodeRenderPass(
     bool enableVertexPulling = GetDevice()->IsToggleEnabled(Toggle::MetalEnableVertexPulling);
     RenderPipeline* lastPipeline = nullptr;
     id<MTLBuffer> indexBuffer = nullptr;
-    uint32_t indexBufferBaseOffset = 0;
+    size_t indexBufferBaseOffset = 0;
     MTLIndexType indexBufferType;
     uint64_t indexFormatSize = 0;
     uint32_t multiDrawIndex = 0;
@@ -1788,11 +1784,11 @@ MaybeError CommandBuffer::EncodeRenderPass(
         renderPassCmd->timestampWrites.beginningOfPassWriteIndex != kQuerySetIndexUndefinedTyped) {
         DAWN_ASSERT(!ToBackend(GetDevice())->UseCounterSamplingAtStageBoundary());
 
+        QuerySet* querySet = ToBackend(renderPassCmd->timestampWrites.querySet.Get());
         [encoder
-            sampleCountersInBuffer:ToBackend(renderPassCmd->timestampWrites.querySet.Get())
-                                       ->GetCounterSampleBuffer()
-                     atSampleIndex:NSUInteger(
-                                       renderPassCmd->timestampWrites.beginningOfPassWriteIndex)
+            sampleCountersInBuffer:querySet->GetCounterSampleBuffer()
+                     atSampleIndex:NSUInteger(querySet->GetSampleIndex(
+                                       renderPassCmd->timestampWrites.beginningOfPassWriteIndex))
                        withBarrier:YES];
     }
 
@@ -1947,10 +1943,8 @@ MaybeError CommandBuffer::EncodeRenderPass(
 
             case Command::InsertDebugMarker: {
                 InsertDebugMarkerCmd* cmd = iter->NextCommand<InsertDebugMarkerCmd>();
-                char* label = iter->NextData<char>(cmd->length + 1);
-                NSRef<NSString> mtlLabel =
-                    AcquireNSRef([[NSString alloc] initWithUTF8String:label]);
-                [encoder insertDebugSignpost:mtlLabel.Get()];
+                NSRef<NSString> label = NextNSString(iter, cmd->length);
+                [encoder insertDebugSignpost:label.Get()];
                 break;
             }
 
@@ -1963,10 +1957,8 @@ MaybeError CommandBuffer::EncodeRenderPass(
 
             case Command::PushDebugGroup: {
                 PushDebugGroupCmd* cmd = iter->NextCommand<PushDebugGroupCmd>();
-                char* label = iter->NextData<char>(cmd->length + 1);
-                NSRef<NSString> mtlLabel =
-                    AcquireNSRef([[NSString alloc] initWithUTF8String:label]);
-                [encoder pushDebugGroup:mtlLabel.Get()];
+                NSRef<NSString> label = NextNSString(iter, cmd->length);
+                [encoder pushDebugGroup:label.Get()];
                 break;
             }
 
@@ -1985,7 +1977,7 @@ MaybeError CommandBuffer::EncodeRenderPass(
                 [encoder setDepthStencilState:newPipeline->GetMTLDepthStencilState()];
                 [encoder setFrontFacingWinding:newPipeline->GetMTLFrontFace()];
                 [encoder setCullMode:newPipeline->GetMTLCullMode()];
-                [encoder setDepthBias:newPipeline->GetDepthBias()
+                [encoder setDepthBias:static_cast<float>(newPipeline->GetDepthBias())
                            slopeScale:newPipeline->GetDepthBiasSlopeScale()
                                 clamp:newPipeline->GetDepthBiasClamp()];
 
@@ -2004,21 +1996,21 @@ MaybeError CommandBuffer::EncodeRenderPass(
 
             case Command::SetBindGroup: {
                 SetBindGroupCmd* cmd = iter->NextCommand<SetBindGroupCmd>();
-                uint32_t* dynamicOffsets = nullptr;
-                if (cmd->dynamicOffsetCount > 0) {
+                ityp::span<BindingIndex, const uint32_t> dynamicOffsets;
+                if (cmd->dynamicOffsetCount != BindingIndex{0u}) {
                     dynamicOffsets = iter->NextData<uint32_t>(cmd->dynamicOffsetCount);
                 }
 
-                bindGroups.OnSetBindGroup(cmd->index, ToBackend(cmd->group.Get()),
-                                          cmd->dynamicOffsetCount, dynamicOffsets);
+                bindGroups.OnSetBindGroup(cmd->index, ToBackend(cmd->group.Get()), dynamicOffsets);
                 break;
             }
 
             case Command::SetImmediates: {
                 SetImmediatesCmd* cmd = iter->NextCommand<SetImmediatesCmd>();
                 DAWN_ASSERT(cmd->size > 0);
-                uint8_t* value = iter->NextData<uint8_t>(cmd->size);
-                immediates.SetImmediates(cmd->offset, value, cmd->size);
+                Span<const uint8_t> data = iter->NextData<uint8_t>(cmd->size);
+                // TODO(https://crbug.com/532946455): Spanify ImmediateTracker.
+                immediates.SetImmediates(cmd->offset, data.data(), data.size());
                 break;
             }
 
@@ -2060,13 +2052,12 @@ MaybeError CommandBuffer::EncodeRenderPass(
                         kQuerySetIndexUndefinedTyped) {
                     DAWN_ASSERT(!ToBackend(GetDevice())->UseCounterSamplingAtStageBoundary());
 
-                    [encoder
-                        sampleCountersInBuffer:ToBackend(
-                                                   renderPassCmd->timestampWrites.querySet.Get())
-                                                   ->GetCounterSampleBuffer()
-                                 atSampleIndex:NSUInteger(renderPassCmd->timestampWrites
-                                                              .endOfPassWriteIndex)
-                                   withBarrier:YES];
+                    QuerySet* querySet = ToBackend(renderPassCmd->timestampWrites.querySet.Get());
+                    [encoder sampleCountersInBuffer:querySet->GetCounterSampleBuffer()
+                                      atSampleIndex:NSUInteger(querySet->GetSampleIndex(
+                                                        renderPassCmd->timestampWrites
+                                                            .endOfPassWriteIndex))
+                                        withBarrier:YES];
                 }
 
                 UpdateQueryAvailability(renderPassCmd->timestampWrites);
@@ -2082,12 +2073,12 @@ MaybeError CommandBuffer::EncodeRenderPass(
             case Command::SetViewport: {
                 SetViewportCmd* cmd = mCommands.NextCommand<SetViewportCmd>();
                 MTLViewport viewport;
-                viewport.originX = cmd->x;
-                viewport.originY = cmd->y;
-                viewport.width = cmd->width;
-                viewport.height = cmd->height;
-                viewport.znear = cmd->minDepth;
-                viewport.zfar = cmd->maxDepth;
+                viewport.originX = double{cmd->x};
+                viewport.originY = double{cmd->y};
+                viewport.width = double{cmd->width};
+                viewport.height = double{cmd->height};
+                viewport.znear = double{cmd->minDepth};
+                viewport.zfar = double{cmd->maxDepth};
 
                 // Try applying the immediate data that contain min/maxDepth immediately. This can
                 // be deferred if no pipeline is currently bound.
@@ -2111,10 +2102,10 @@ MaybeError CommandBuffer::EncodeRenderPass(
 
             case Command::SetBlendConstant: {
                 SetBlendConstantCmd* cmd = mCommands.NextCommand<SetBlendConstantCmd>();
-                [encoder setBlendColorRed:cmd->color.r
-                                    green:cmd->color.g
-                                     blue:cmd->color.b
-                                    alpha:cmd->color.a];
+                [encoder setBlendColorRed:static_cast<float>(cmd->color.r)
+                                    green:static_cast<float>(cmd->color.g)
+                                     blue:static_cast<float>(cmd->color.b)
+                                    alpha:static_cast<float>(cmd->color.a)];
                 break;
             }
 
@@ -2122,8 +2113,8 @@ MaybeError CommandBuffer::EncodeRenderPass(
                 ExecuteBundlesCmd* cmd = mCommands.NextCommand<ExecuteBundlesCmd>();
                 auto bundles = mCommands.NextData<Ref<RenderBundleBase>>(cmd->count);
 
-                for (uint32_t i = 0; i < cmd->count; ++i) {
-                    CommandIterator* iter = DAWN_UNSAFE_TODO(bundles[i]->GetCommands());
+                for (const auto& bundle : bundles) {
+                    CommandIterator* iter = bundle->GetCommands();
                     iter->Reset();
                     while (iter->NextCommandId(&type)) {
                         EncodeRenderBundleCommand(iter, type);
@@ -2169,9 +2160,10 @@ MaybeError CommandBuffer::EncodeRenderPass(
                 WriteTimestampCmd* cmd = mCommands.NextCommand<WriteTimestampCmd>();
                 QuerySet* querySet = ToBackend(cmd->querySet.Get());
 
-                [encoder sampleCountersInBuffer:querySet->GetCounterSampleBuffer()
-                                  atSampleIndex:NSUInteger(cmd->queryIndex)
-                                    withBarrier:YES];
+                [encoder
+                    sampleCountersInBuffer:querySet->GetCounterSampleBuffer()
+                             atSampleIndex:NSUInteger(querySet->GetSampleIndex(cmd->queryIndex))
+                               withBarrier:YES];
 
                 UpdateQueryAvailability(cmd);
                 break;

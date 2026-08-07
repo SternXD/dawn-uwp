@@ -31,11 +31,7 @@
 
 namespace dawn::wire::server {
 
-MockMemoryTransferService::MockReadHandle::~MockReadHandle() {
-    Destroy();
-}
-
-MockMemoryTransferService::MockWriteHandle::~MockWriteHandle() {
+MockMemoryTransferService::MockMemoryHandle::~MockMemoryHandle() {
     Destroy();
 }
 

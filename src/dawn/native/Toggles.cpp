@@ -180,6 +180,9 @@ static constexpr ToggleEnumAndInfoList kToggleNameAndInfoList = {{
       "Suppresses validation errors on API entry points or parameter combinations that aren't "
       "considered secure yet.",
       "http://crbug.com/1138528", ToggleStage::Instance}},
+    {Toggle::AllowExperimentalSnorm10_10_10_2,
+     {"allow_experimental_snorm10_10_10_2", "Allow the experimental snorm10_10_10_2 vertex format.",
+      "https://crbug.com/dawn/536160421", ToggleStage::Instance}},
     {Toggle::FlushBeforeClientWaitSync,
      {"flush_before_client_wait_sync",
       "Call glFlush before glClientWaitSync to work around bugs in the latter",
@@ -496,6 +499,14 @@ static constexpr ToggleEnumAndInfoList kToggleNameAndInfoList = {{
       "Use a shader based blit instead of a copy command to copy a buffer to a texture with "
       "supported format.",
       "https://crbug.com/dawn/348653642", ToggleStage::Device}},
+    {Toggle::VulkanSplitBufferTextureCopyForArrayLayers,
+     {"vulkan_split_buffer_texture_copy_for_array_layers",
+      "Split a multi-layer buffer-to-texture / texture-to-buffer copy into one vkCmdCopy*Image "
+      "region per array layer / depth slice, each with an explicit per-layer buffer offset, "
+      "instead of a single region with layerCount > 1. Workaround for Huawei Maleoon GPUs, whose "
+      "drivers mis-stride the buffer between layers when bufferImageHeight is padded, corrupting "
+      "every layer after the first.",
+      "https://issues.chromium.org/issues/520126486", ToggleStage::Device}},
     {Toggle::GLUseArrayLengthFromUniform,
      {"gl_use_array_length_from_uniform",
       "Use arrayLengthFromUniform transform to replace arrayLength() function calls of dynamic "
@@ -796,6 +807,23 @@ static constexpr ToggleEnumAndInfoList kToggleNameAndInfoList = {{
      {"metal_fix_u32_div_mod",
       "Workaround a driver bug on Apple Silicon with u32 div and mod operations.",
       "https://crbug.com/517225032", ToggleStage::Device}},
+    {Toggle::VulkanSleepAfterLostDeviceWait,
+     {"vulkan_sleep_after_lost_device_wait",
+      "Insert an arbitrary sleep after WaitIdle functions on device loss.",
+      "https://crbug.com/500417361", ToggleStage::Device}},
+    {Toggle::UseSpirvReconvergenceMode,
+     {"use_spirv_reconvergence_mode",
+      "Use SPIR-V reconvergence execution mode if supported by the device.",
+      "https://crbug.com/379673383", ToggleStage::Device}},
+    {Toggle::VulkanReplaceWorkgroupAtomicStoreWithExchange,
+     {"vulkan_replace_workgroup_atomic_store_with_exchange",
+      "Workaround for a driver bug that implements atomic store incorrectly.",
+      "https://crbug.com/487773864", ToggleStage::Device}},
+    {Toggle::VulkanDisallowNPOTDepthStencilMipmaps,
+     {"vulkan_disallow_npot_depth_stencil_mipmaps",
+      "Reject NPOT depth/stencil textures with mipLevelCount > 1. Workaround for mip level "
+      "miscomputation in PowerVR proprietary driver.",
+      "https://crbug.com/540087398", ToggleStage::Device}},
     {Toggle::WaitIsThreadSafe,
      {"wait_is_thread_safe",
       "WaitFor* functions are thread-safe and can be called without the device-lock if implicit "
@@ -917,9 +945,8 @@ TogglesState TogglesState::CreateFromTogglesDescriptor(const DawnTogglesDescript
     }
 
     TogglesInfo togglesInfo;
-    for (uint32_t i = 0; i < togglesDesc->enabledToggleCount; ++i) {
-        Toggle toggle =
-            togglesInfo.ToggleNameToEnum(DAWN_UNSAFE_TODO(togglesDesc->enabledToggles[i]));
+    for (const char* toggleName : togglesDesc->enabledToggles) {
+        Toggle toggle = togglesInfo.ToggleNameToEnum(toggleName);
         if (toggle != Toggle::InvalidEnum) {
             const ToggleInfo* toggleInfo = togglesInfo.GetToggleInfo(toggle);
             // Accept the required toggles of current and earlier stage to allow override
@@ -930,9 +957,8 @@ TogglesState TogglesState::CreateFromTogglesDescriptor(const DawnTogglesDescript
             }
         }
     }
-    for (uint32_t i = 0; i < togglesDesc->disabledToggleCount; ++i) {
-        Toggle toggle =
-            togglesInfo.ToggleNameToEnum(DAWN_UNSAFE_TODO(togglesDesc->disabledToggles[i]));
+    for (const char* toggleName : togglesDesc->disabledToggles) {
+        Toggle toggle = togglesInfo.ToggleNameToEnum(toggleName);
         if (toggle != Toggle::InvalidEnum) {
             const ToggleInfo* toggleInfo = togglesInfo.GetToggleInfo(toggle);
             // Accept the required toggles of current and earlier stage to allow override

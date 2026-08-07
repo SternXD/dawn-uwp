@@ -45,7 +45,6 @@ namespace {
 
 using testing::_;
 using testing::EmptySizedString;
-using testing::InvokeWithoutArgs;
 using testing::IsNull;
 using testing::NonEmptySizedString;
 using testing::NotNull;
@@ -141,7 +140,7 @@ TEST_P(WireInstanceTests, RequestAdapterSuccess) {
     // Expect the server to receive the message. Then, mock a fake reply.
     WGPUAdapter apiAdapter = api.GetNewAdapter();
     EXPECT_CALL(api, OnInstanceRequestAdapter(apiInstance, NotNull(), _))
-        .WillOnce(InvokeWithoutArgs([&] {
+        .WillOnce([&] {
             EXPECT_CALL(api, AdapterHasFeature(apiAdapter, _)).WillRepeatedly(Return(false));
 
             EXPECT_CALL(api, AdapterGetInfo(apiAdapter, NotNull()))
@@ -162,7 +161,7 @@ TEST_P(WireInstanceTests, RequestAdapterSuccess) {
 
             api.CallInstanceRequestAdapterCallback(apiInstance, WGPURequestAdapterStatus_Success,
                                                    apiAdapter, kEmptyOutputStringView);
-        }));
+        });
 
     FlushClient();
     FlushFutures();
@@ -260,7 +259,7 @@ TEST_P(WireInstanceTests, RequestAdapterPassesChainedProperties) {
     // Expect the server to receive the message. Then, mock a fake reply.
     WGPUAdapter apiAdapter = api.GetNewAdapter();
     EXPECT_CALL(api, OnInstanceRequestAdapter(apiInstance, NotNull(), _))
-        .WillOnce(InvokeWithoutArgs([&] {
+        .WillOnce([&] {
             EXPECT_CALL(api, AdapterGetLimits(apiAdapter, NotNull())).Times(1);
             EXPECT_CALL(api, AdapterGetFeatures(apiAdapter, NotNull()))
                 .WillOnce(
@@ -309,7 +308,7 @@ TEST_P(WireInstanceTests, RequestAdapterPassesChainedProperties) {
 
             api.CallInstanceRequestAdapterCallback(apiInstance, WGPURequestAdapterStatus_Success,
                                                    apiAdapter, kEmptyOutputStringView);
-        }));
+        });
 
     FlushClient();
     FlushFutures();
@@ -408,7 +407,7 @@ TEST_P(WireInstanceTests, RequestAdapterWireLacksFeatureSupport) {
     // Expect the server to receive the message. Then, mock a fake reply.
     WGPUAdapter apiAdapter = api.GetNewAdapter();
     EXPECT_CALL(api, OnInstanceRequestAdapter(apiInstance, NotNull(), _))
-        .WillOnce(InvokeWithoutArgs([&] {
+        .WillOnce([&] {
             EXPECT_CALL(api, AdapterHasFeature(apiAdapter, _)).WillRepeatedly(Return(false));
             EXPECT_CALL(api, AdapterGetInfo(apiAdapter, NotNull())).Times(1);
             EXPECT_CALL(api, AdapterGetLimits(apiAdapter, NotNull())).Times(1);
@@ -419,7 +418,7 @@ TEST_P(WireInstanceTests, RequestAdapterWireLacksFeatureSupport) {
 
             api.CallInstanceRequestAdapterCallback(apiInstance, WGPURequestAdapterStatus_Success,
                                                    apiAdapter, kEmptyOutputStringView);
-        }));
+        });
 
     FlushClient();
     FlushFutures();
@@ -445,11 +444,10 @@ TEST_P(WireInstanceTests, RequestAdapterError) {
     RequestAdapter(&options);
 
     // Expect the server to receive the message. Then, mock an error.
-    EXPECT_CALL(api, OnInstanceRequestAdapter(apiInstance, NotNull(), _))
-        .WillOnce(InvokeWithoutArgs([&] {
-            api.CallInstanceRequestAdapterCallback(apiInstance, WGPURequestAdapterStatus_Error,
-                                                   nullptr, ToOutputStringView("Some error"));
-        }));
+    EXPECT_CALL(api, OnInstanceRequestAdapter(apiInstance, NotNull(), _)).WillOnce([&] {
+        api.CallInstanceRequestAdapterCallback(apiInstance, WGPURequestAdapterStatus_Error, nullptr,
+                                               ToOutputStringView("Some error"));
+    });
 
     FlushClient();
     FlushFutures();
@@ -464,24 +462,7 @@ TEST_P(WireInstanceTests, RequestAdapterError) {
     });
 }
 
-// Test that RequestAdapter receives unknown status if the instance is deleted before the callback
-// happens.
-TEST_P(WireInstanceTests, RequestAdapterInstanceDestroyedBeforeCallback) {
-    // For spontaneous, dropping the instance does not immediately call the callback because it is
-    // allowed to resolve later.
-    DAWN_SKIP_TEST_IF(IsSpontaneous());
 
-    wgpu::RequestAdapterOptions options = {};
-    RequestAdapter(&options);
-
-    ExpectWireCallbacksWhen([&](auto& mockCb) {
-        EXPECT_CALL(mockCb, Call(wgpu::RequestAdapterStatus::CallbackCancelled, IsNull(),
-                                 NonEmptySizedString()))
-            .Times(1);
-
-        instance = nullptr;
-    });
-}
 
 // Test that RequestAdapter receives unknown status if the wire is disconnected
 // before the callback happens.

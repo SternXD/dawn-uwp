@@ -36,7 +36,6 @@
 #include "src/tint/lang/core/ir/binary.h"
 #include "src/tint/lang/core/ir/block_param.h"
 #include "src/tint/lang/core/ir/break_if.h"
-#include "src/tint/lang/core/ir/capabilities.h"
 #include "src/tint/lang/core/ir/construct.h"
 #include "src/tint/lang/core/ir/continue.h"
 #include "src/tint/lang/core/ir/control_instruction.h"
@@ -73,6 +72,7 @@
 #include "src/tint/lang/core/ir/unreachable.h"
 #include "src/tint/lang/core/ir/user_call.h"
 #include "src/tint/lang/core/ir/var.h"
+#include "src/tint/lang/core/type/swizzle_view.h"
 #include "src/tint/lang/core/type/type.h"
 #include "src/tint/utils/containers/hashset.h"
 #include "src/tint/utils/diagnostic/diagnostic.h"
@@ -95,7 +95,7 @@ using SupportedStages = tint::EnumSet<Function::PipelineStage>;
 
 class Structural {
   public:
-    Structural(const Module& ir, diag::List& diagnostics, Capabilities capabilities);
+    Structural(const Module& ir, diag::List& diagnostics);
     ~Structural();
 
     void Validate();
@@ -317,11 +317,116 @@ class Structural {
 
     /// Checks that @p type is allowed by the spec, and does not use any types that are prohibited
     /// by the target properties.
+    /// NOTE: Expects to be called on a 'root' type, i.e. the type of a variable declaration or a
+    ///       function param, not in the middle a walk of elements of a composite.
     /// @param type the type
     /// @param diag a function that creates an error diagnostic for the source of the type
-    void CheckType(const core::type::Type* type,
-                   std::function<diag::Diagnostic&()> diag,
-                   Capabilities allow_caps = {});
+    void CheckType(const core::type::Type* type, std::function<diag::Diagnostic&()> diag);
+
+    /// Check that @p type and its children are not nested beyond the depth limit
+    /// NOTE: Expects to be called by CheckType, i.e. on a 'root' type, not in the middle a walk of
+    ///       elements of a composite..
+    /// @param type the type
+    /// @param diag a function that creates an error diagnostic for the source of the type
+    bool CheckNestDepth(const core::type::Type* type, std::function<diag::Diagnostic&()> diag);
+
+    /// Checks that `str` is a valid structure.
+    /// @param str the struct to validate
+    /// @param diag a function that creates an error diagnostic for the source of the type
+    bool CheckStruct(const core::type::Struct* str, std::function<diag::Diagnostic&()>& diag);
+
+    /// Checks that `ref` is a valid reference type
+    /// @param ref the type to check
+    /// @param diag a function that creates an error diagnostic for the source of the type
+    /// @param root the root type of the ref type, maybe the ref itself.
+    bool CheckRef(const core::type::Reference* ref,
+                  std::function<diag::Diagnostic&()>& diag,
+                  const core::type::Type* root);
+
+    /// Checks that `arr` is a valid array type
+    /// @param arr the array the validate
+    /// @param diag a function that creates an error diagnostic for the source of the type
+    bool CheckArray(const core::type::Array* arr, std::function<diag::Diagnostic&()>& diag);
+    /// Checks that `vec` is a valid vector type
+    /// @param vec the vector the validate
+    /// @param diag a function that creates an error diagnostic for the source of the type
+    bool CheckVector(const core::type::Vector* vec, std::function<diag::Diagnostic&()>& diag);
+    /// Checks that `mat` is a valid matrix type
+    /// @param mat the matrix the validate
+    /// @param diag a function that creates an error diagnostic for the source of the type
+    bool CheckMatrix(const core::type::Matrix* mat, std::function<diag::Diagnostic&()>& diag);
+
+    /// Checks that `atom` is a valid atomic type
+    /// @param atom the atomic to check
+    /// @param diag a function that creates an error diagnostic for the source of the type
+    bool CheckAtomic(const core::type::Atomic* atom, std::function<diag::Diagnostic&()>& diag);
+
+    /// Checks that `s` is a valid sampled texture
+    /// @param s the sampled texture to validate
+    /// @param diag a function that creates an error diagnostic for the source of the type
+    bool CheckSampledTexture(const core::type::SampledTexture* s,
+                             std::function<diag::Diagnostic&()>& diag);
+    /// Checks that `ms` is a valid multi-sampled texture
+    /// @param ms the multi-sampled texture to validate
+    /// @param diag a function that creates an error diagnostic for the source of the type
+    bool CheckMultisampledTexture(const core::type::MultisampledTexture* ms,
+                                  std::function<diag::Diagnostic&()>& diag);
+    /// Checks that `storage` is a valid storage texture
+    /// @param storage the storage texture
+    /// @param diag a function that creates an error diagnostic for the source of the type
+    bool CheckStorageTexture(const core::type::StorageTexture* storage,
+                             std::function<diag::Diagnostic&()>& diag);
+
+    /// Checks that `ia` is a valid input attachment
+    /// @param ia the input attachment
+    /// @param diag a function that creates an error diagnostic for the source of the type
+    bool CheckInputAttachment(const core::type::InputAttachment* ia,
+                              std::function<diag::Diagnostic&()>& diag);
+
+    /// Checks that `m` is a valid subgroup matrix
+    /// @param m the subgroup matrix
+    /// @param diag a function that creates an error diagnostic for the source of the type
+    /// @param addrspace the address space of the root type
+    bool CheckSubgroupMatrix(const core::type::SubgroupMatrix* m,
+                             std::function<diag::Diagnostic&()>& diag,
+                             core::AddressSpace addrspace);
+    /// Checks that `ba` is a valid binding array
+    /// @param ba the binding array
+    /// @param diag a function that creates an error diagnostic for the source of the type
+    /// @param addrspace the address space of the root type
+    bool CheckBindingArray(const core::type::BindingArray* ba,
+                           std::function<diag::Diagnostic&()>& diag,
+                           core::AddressSpace addrspace);
+
+    /// Checks that buffers are available
+    /// @param diag a function that creates an error diagnostic for the source of the type
+    bool CheckBuffer(const core::type::Buffer* buf, std::function<diag::Diagnostic&()>& diag);
+
+    /// Checks that `sv` is a valid swizzle view type
+    /// @param sv the swizzle view to validate
+    /// @param diag a function that creates an error diagnostic for the source of the type
+    bool CheckSwizzleView(const core::type::SwizzleView* sv,
+                          std::function<diag::Diagnostic&()>& diag);
+
+    /// Checks that 8-bit integer types are permitted
+    /// @param diag a function that creates an error diagnostic for the source of the type
+    /// @param parent the parent type for the 8-bit type
+    bool Check8BitInteger(std::function<diag::Diagnostic&()>& diag, const core::type::Type* parent);
+    /// Checks that 16-bit integer types are permitted
+    /// @param diag a function that creates an error diagnostic for the source of the type
+    bool Check16BitInteger(std::function<diag::Diagnostic&()>& diag);
+    /// Checks that 64-bit integer types are permitted
+    /// @param diag a function that creates an error diagnostic for the source of the type
+    bool Check64BitInteger(std::function<diag::Diagnostic&()>& diag);
+
+    /// Checks that 16-bit floats are allowed.
+    /// @param diag a function that creates an error diagnostic for the source of the type
+    bool Check16BitFloat(std::function<diag::Diagnostic&()>& diag);
+
+    /// Checks that `ptr` is a valid pointer type
+    /// @param ptr the pointer to check
+    /// @param diag a function that creates an error diagnostic for the source of the type
+    bool CheckPtr(const core::type::Pointer* ptr, std::function<diag::Diagnostic&()>& diag);
 
     /// Validates the root block
     /// @param blk the block
@@ -334,6 +439,14 @@ class Structural {
     /// Validates the given function
     /// @param func the function to validate
     void CheckFunction(const Function* func);
+    /// Validates a function parameter
+    /// @param param the parameter
+    /// @returns true if validation should be continued
+    bool CheckFunctionParam(const Function* func,
+                            const FunctionParam* param,
+                            Hashset<const FunctionParam*, 4>& param_set);
+    /// Checks for entry point validation errors. Returns if `func` is not an entrypoint.
+    void CheckEntryPoint(const Function* func);
 
     /// Validates the workgroup_size attribute for a given function
     /// @param func the function to validate
@@ -677,7 +790,6 @@ class Structural {
 
     const Module& ir_;
     diag::List& diag_;
-    Capabilities capabilities_;
     std::optional<ir::Disassembler> disassembler_;  // Use Disassemble()
 
     SymbolTable symbols_ = SymbolTable::Wrap(ir_.symbols);
@@ -696,6 +808,7 @@ class Structural {
     Hashmap<const ir::Function*, Hashset<const ir::UserCall*, 4>, 4> user_func_calls_;
     Hashmap<const ir::Instruction*, SupportedStages, 4> stage_restricted_instructions_;
     Hashset<const core::type::Type*, 16> validated_types_{};
+    Hashmap<const core::type::Type*, uint64_t, 16> max_nest_depth_{};
 };
 
 }  // namespace tint::core::ir::validator

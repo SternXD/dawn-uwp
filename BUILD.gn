@@ -103,6 +103,11 @@ if (dawn_standalone) {
     deps = [ "tools/android" ]
   }
 
+  group("litert_lm") {
+    testonly = true
+    deps = [ "third_party/litert-lm:litert_lm_advanced_main" ]
+  }
+
   if (dawn_build_emdawnwebgpu) {
     # These targets are only valid when the Wasm toolchain is available.
     assert(dawn_wasm,
@@ -154,27 +159,6 @@ if (dawn_standalone) {
     testonly = true
     deps = [ ":all" ]
   }
-}
-
-config("abseil_config") {
-  if (is_clang) {
-    cflags = [
-      # Allow the use of enable_if()
-      "-Wno-gcc-compat",
-      "-Wno-unreachable-code-break",
-
-      # Allows use of _Nullable, _Nonnull & _Null_unspecified
-      "-Wno-nullability-extension",
-
-      # vlog has some shadowing, which Windows Clang doesn't like
-      "-Wno-shadow",
-    ]
-  }
-}
-
-group("abseil") {
-  public_deps = [ "${dawn_abseil_dir}:absl" ]
-  public_configs = [ ":abseil_config" ]
 }
 
 # GN evaluates each .gn file once per toolchain, so restricting to default

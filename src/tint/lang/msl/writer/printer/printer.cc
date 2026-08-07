@@ -132,7 +132,7 @@ class Printer : public tint::TextGenerator {
 
     /// @returns the generated MSL shader
     tint::Result<Output> Generate() {
-        AssertValid(ir_, kPrinterCapabilities, "before msl.Printer");
+        AssertValid(ir_, "before msl.Printer");
         AssertNoUnsupportedProperties(ir_, kUnsupportedProperties);
 
         {
@@ -375,6 +375,13 @@ class Printer : public tint::TextGenerator {
                     result_.workgroup_info.y = wg_size[1];
                     result_.workgroup_info.z = wg_size[2];
 
+                    // Store the subgroup size information away to return from the generator when
+                    // the `@subgroup_size` attribute is used.
+                    const auto const_sg_size = func->SubgroupSizeAsConst();
+                    if (const_sg_size.has_value()) {
+                        result_.workgroup_info.subgroup_size = const_sg_size;
+                    }
+
                     break;
                 }
                 case core::ir::Function::PipelineStage::kFragment:
@@ -457,6 +464,12 @@ class Printer : public tint::TextGenerator {
                     auto& allocations = result_.workgroup_allocations;
                     out << " [[threadgroup(" << allocations.size() << ")]]";
                     allocations.push_back(ty->Size());
+
+                    // Because we combine the workgroup memory into a single struct, we should only
+                    // ever get a single allocation. If we change this we need to update the
+                    // corresponding validation in ShaderModuleMTL which checks the allocation size
+                    // against the available compute workgroup memory size.
+                    TINT_ASSERT(allocations.size() == 1);
 
                     // Currently type is always a struct, if this changes in the future we'll need
                     // to update this to handle non-struct data as well.

@@ -48,7 +48,10 @@ using namespace tint::core::number_suffixes;  // NOLINT
 namespace tint::msl::writer::raise {
 namespace {
 
-using MslWriter_BuiltinPolyfillTest = core::ir::transform::TransformTest;
+struct MslWriter_BuiltinPolyfillTest : public core::ir::transform::TransformTest {
+  protected:
+    void SetUp() override { mod.properties.Add(core::ir::Property::kAllow16BitFloats); }
+};
 
 TEST_F(MslWriter_BuiltinPolyfillTest, AtomicAdd_Workgroup_I32) {
     auto* a = b.FunctionParam<ptr<workgroup, atomic<i32>>>("a");
@@ -3585,7 +3588,51 @@ TEST_F(MslWriter_BuiltinPolyfillTest, SubgroupMatrixLoad_Storage_F32) {
 }
 )";
 
-    capabilities.Add(core::ir::Capability::kAllow64BitIntegers);
+    BuiltinPolyfillConfig config;
+    Run(BuiltinPolyfill, config);
+
+    EXPECT_EQ(expect, str());
+}
+
+TEST_F(MslWriter_BuiltinPolyfillTest, SubgroupMatrixLoad_SignedOffsetAndStride) {
+    auto* mat = ty.subgroup_matrix_result(ty.f32(), 8, 8);
+    auto* p = b.FunctionParam<ptr<storage, array<f32, 256>>>("p");
+    auto* func = b.Function("foo", mat);
+    auto* offset = b.FunctionParam("offset", ty.i32());
+    auto* stride = b.FunctionParam("stride", ty.i32());
+    func->SetParams({p, offset, stride});
+    b.Append(func->Block(), [&] {
+        auto* call =
+            b.CallExplicit(mat, core::BuiltinFn::kSubgroupMatrixLoad,
+                           Vector<core::ir::TemplateParameter, 1>{mat}, p, offset, false, stride);
+        b.Return(func, call);
+    });
+
+    auto* src = R"(
+%foo = func(%p:ptr<storage, array<f32, 256>, read_write>, %offset:i32, %stride:i32):subgroup_matrix_result<f32, 8, 8> {
+  $B1: {
+    %5:subgroup_matrix_result<f32, 8, 8> = subgroupMatrixLoad<subgroup_matrix_result<f32, 8, 8>> %p, %offset, false, %stride
+    ret %5
+  }
+}
+)";
+    EXPECT_EQ(src, str());
+
+    auto* expect = R"(
+%foo = func(%p:ptr<storage, array<f32, 256>, read_write>, %offset:i32, %stride:i32):subgroup_matrix_result<f32, 8, 8> {
+  $B1: {
+    %5:u32 = bitcast<u32> %stride
+    %6:ptr<storage, f32, read_write> = access %p, %offset
+    %7:u64 = msl.convert %5
+    %8:ptr<function, subgroup_matrix_result<f32, 8, 8>, read_write> = var undef
+    %9:subgroup_matrix_result<f32, 8, 8> = load %8
+    %10:void = msl.simdgroup_load %9, %6, %7, vec2<u64>(0u64), false
+    %11:subgroup_matrix_result<f32, 8, 8> = load %8
+    ret %11
+  }
+}
+)";
+
     BuiltinPolyfillConfig config;
     Run(BuiltinPolyfill, config);
 
@@ -3628,7 +3675,6 @@ TEST_F(MslWriter_BuiltinPolyfillTest, SubgroupMatrixLoad_Storage_F32_ColMajorTem
 }
 )";
 
-    capabilities.Add(core::ir::Capability::kAllow64BitIntegers);
     BuiltinPolyfillConfig config;
     Run(BuiltinPolyfill, config);
 
@@ -3671,7 +3717,6 @@ TEST_F(MslWriter_BuiltinPolyfillTest, SubgroupMatrixLoad_Storage_F32_RowMajorTem
 }
 )";
 
-    capabilities.Add(core::ir::Capability::kAllow64BitIntegers);
     BuiltinPolyfillConfig config;
     Run(BuiltinPolyfill, config);
 
@@ -3714,7 +3759,6 @@ TEST_F(MslWriter_BuiltinPolyfillTest, SubgroupMatrixLoad_Workgroup_F16) {
 }
 )";
 
-    capabilities.Add(core::ir::Capability::kAllow64BitIntegers);
     BuiltinPolyfillConfig config;
     Run(BuiltinPolyfill, config);
 
@@ -3752,7 +3796,46 @@ TEST_F(MslWriter_BuiltinPolyfillTest, SubgroupMatrixStore_Storage_F32) {
 }
 )";
 
-    capabilities.Add(core::ir::Capability::kAllow64BitIntegers);
+    BuiltinPolyfillConfig config;
+    Run(BuiltinPolyfill, config);
+
+    EXPECT_EQ(expect, str());
+}
+
+TEST_F(MslWriter_BuiltinPolyfillTest, SubgroupMatrixStore_SignedOffsetAndStride) {
+    auto* p = b.FunctionParam<ptr<storage, array<f32, 256>>>("p");
+    auto* m = b.FunctionParam("m", ty.subgroup_matrix_result(ty.f32(), 8, 8));
+    auto* func = b.Function("foo", ty.void_());
+    auto* offset = b.FunctionParam("offset", ty.i32());
+    auto* stride = b.FunctionParam("stride", ty.i32());
+    func->SetParams({p, m, offset, stride});
+    b.Append(func->Block(), [&] {
+        b.Call<void>(core::BuiltinFn::kSubgroupMatrixStore, p, offset, m, false, stride);
+        b.Return(func);
+    });
+
+    auto* src = R"(
+%foo = func(%p:ptr<storage, array<f32, 256>, read_write>, %m:subgroup_matrix_result<f32, 8, 8>, %offset:i32, %stride:i32):void {
+  $B1: {
+    %6:void = subgroupMatrixStore %p, %offset, %m, false, %stride
+    ret
+  }
+}
+)";
+    EXPECT_EQ(src, str());
+
+    auto* expect = R"(
+%foo = func(%p:ptr<storage, array<f32, 256>, read_write>, %m:subgroup_matrix_result<f32, 8, 8>, %offset:i32, %stride:i32):void {
+  $B1: {
+    %6:u32 = bitcast<u32> %stride
+    %7:ptr<storage, f32, read_write> = access %p, %offset
+    %8:u64 = msl.convert %6
+    %9:void = msl.simdgroup_store %m, %7, %8, vec2<u64>(0u64), false
+    ret
+  }
+}
+)";
+
     BuiltinPolyfillConfig config;
     Run(BuiltinPolyfill, config);
 
@@ -3792,7 +3875,6 @@ TEST_F(MslWriter_BuiltinPolyfillTest, SubgroupMatrixStore_Storage_F32_ColMajorTe
 }
 )";
 
-    capabilities.Add(core::ir::Capability::kAllow64BitIntegers);
     BuiltinPolyfillConfig config;
     Run(BuiltinPolyfill, config);
 
@@ -3832,7 +3914,6 @@ TEST_F(MslWriter_BuiltinPolyfillTest, SubgroupMatrixStore_Storage_F32_RowMajorTe
 }
 )";
 
-    capabilities.Add(core::ir::Capability::kAllow64BitIntegers);
     BuiltinPolyfillConfig config;
     Run(BuiltinPolyfill, config);
 
@@ -3870,7 +3951,6 @@ TEST_F(MslWriter_BuiltinPolyfillTest, SubgroupMatrixStore_Workgroup_F16) {
 }
 )";
 
-    capabilities.Add(core::ir::Capability::kAllow64BitIntegers);
     BuiltinPolyfillConfig config;
     Run(BuiltinPolyfill, config);
 
@@ -4272,7 +4352,7 @@ TEST_F(MslWriter_BuiltinPolyfillTest, Tanh_vec2_f16) {
 }
 
 TEST_F(MslWriter_BuiltinPolyfillTest, AtomicStoreMin) {
-    this->capabilities.Add(core::ir::Capability::kAllow64BitIntegers);
+    mod.properties.Add(core::ir::Property::kAllow64BitIntegers);
     auto* var = b.Var(ty.ptr(storage, ty.atomic(ty.u64())));
     var->SetBindingPoint(0, 0);
     mod.root_block->Append(var);
@@ -4321,7 +4401,7 @@ $B1: {  # root
 }
 
 TEST_F(MslWriter_BuiltinPolyfillTest, AtomicStoreMax) {
-    this->capabilities.Add(core::ir::Capability::kAllow64BitIntegers);
+    mod.properties.Add(core::ir::Property::kAllow64BitIntegers);
     auto* var = b.Var(ty.ptr(storage, ty.atomic(ty.u64())));
     var->SetBindingPoint(0, 0);
     mod.root_block->Append(var);

@@ -27,6 +27,7 @@
 
 import hashlib
 import dataclasses
+import pathlib
 import re
 import sys
 from typing import Optional
@@ -137,6 +138,53 @@ _BANNED_CPP_PATTERNS: Sequence[BanRule] = (
         treat_as_error=False,
         surface_as_gerrit_lint=True,
     ),
+    BanRule(
+        pattern=r'__EMSCRIPTEN__\b',
+        excluded_paths=(r'^src/utils/platform\.h$', ),
+        explanation='Use DAWN_PLATFORM_IS(EMSCRIPTEN) instead where possible.',
+        treat_as_error=False,
+        surface_as_gerrit_lint=True,
+    ),
+    BanRule(
+        pattern=r'/\b(EXPECT_DEATH|EXPECT_DEBUG_DEATH)\b',
+        excluded_paths=(r'^src/utils/gtest\.h$', ),
+        explanation=(
+            'Use EXPECT_DEATH_IF_SUPPORTED or ',
+            'DAWN_EXPECT_DEBUG_DEATH_IF_SUPPORTED instead.',
+        ),
+        treat_as_error=True,
+        surface_as_gerrit_lint=True,
+    ),
+    BanRule(
+        pattern=r'/\b(ASSERT_DEATH|ASSERT_DEBUG_DEATH)\b',
+        excluded_paths=(r'^src/utils/gtest\.h$', ),
+        explanation=(
+            'Use ASSERT_DEATH_IF_SUPPORTED or ',
+            'DAWN_ASSERT_DEBUG_DEATH_IF_SUPPORTED instead.',
+        ),
+        treat_as_error=True,
+        surface_as_gerrit_lint=True,
+    ),
+    BanRule(
+        pattern=r'runtime/explicit',
+        explanation='Use explicit(false) instead of NOLINT(runtime/explicit).',
+        treat_as_error=True,
+        surface_as_gerrit_lint=True,
+    ),
+    BanRule(
+        pattern=
+        r'/misc-explicit-constructor|cppcoreguidelines-explicit-constructor',
+        # We would prefer to use explicit(false) here too, but it doesn't work
+        # to suppress the clang-tidy warning on operators.
+        # There's no ban rule on google-explicit-constructor because it's hard
+        # to implement while allowing it on operators.
+        explanation=(
+            'Use explicit(false) for constructors, and ',
+            'NOLINTNEXTLINE(google-explicit-constructor) for operators.',
+        ),
+        treat_as_error=True,
+        surface_as_gerrit_lint=True,
+    ),
 )
 
 EXPECTED_LICENSE_TEXT = {
@@ -166,6 +214,33 @@ EXPECTED_LICENSE_TEXT = {
         "// CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,",
         "// OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE",
         "// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.",
+    ],
+    "//*": [
+        "//*",
+        "//* Redistribution and use in source and binary forms, with or without",
+        "//* modification, are permitted provided that the following conditions are met:",
+        "//*",
+        "//* 1. Redistributions of source code must retain the above copyright notice, this",
+        "//*    list of conditions and the following disclaimer.",
+        "//*",
+        "//* 2. Redistributions in binary form must reproduce the above copyright notice,",
+        "//*    this list of conditions and the following disclaimer in the documentation",
+        "//*    and/or other materials provided with the distribution.",
+        "//*",
+        "//* 3. Neither the name of the copyright holder nor the names of its",
+        "//*    contributors may be used to endorse or promote products derived from",
+        "//*    this software without specific prior written permission.",
+        "//*",
+        "//* THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS \"AS IS\"",
+        "//* AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE",
+        "//* IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE",
+        "//* DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE",
+        "//* FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL",
+        "//* DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR",
+        "//* SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER",
+        "//* CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,",
+        "//* OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE",
+        "//* OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.",
     ],
     "#": [
         "#",
@@ -470,6 +545,8 @@ def _CheckCopyrightText(input_api, output_api, f, new_contents_lines):
         if match := copyright_regex.search(line):
             # Determine the comment prefix.
             prefix = "//"
+            if line.strip().startswith("//*"):
+                prefix = "//*"
             if line.strip().startswith("#"):
                 prefix = "#"
 
@@ -568,6 +645,7 @@ def CheckUnsafeBuffersSafetyComments(input_api, output_api):
     safety_comment_regex = re.compile(r'//.*\bSAFETY\b')
 
     problems = []
+    locations = []
 
     for f in input_api.AffectedFiles(include_deletes=False,
                                      file_filter=file_filter):
@@ -596,13 +674,20 @@ def CheckUnsafeBuffersSafetyComments(input_api, output_api):
                         f"{f.LocalPath()}:{line_num}: "
                         "DAWN_UNSAFE_BUFFERS usage must be accompanied by a "
                         "// SAFETY: comment.")
+                    locations.append(
+                        output_api.PresubmitResultLocation(
+                            file_path=f.LocalPath(),
+                            start_line=line_num,
+                            end_line=line_num,
+                        ))
 
     if problems:
         return [
-            output_api.PresubmitError(
+            output_api.PresubmitPromptWarning(
                 "DAWN_UNSAFE_BUFFERS usages must be accompanied by a "
                 "// SAFETY: comment explaining why they are safe.",
-                items=problems)
+                items=problems,
+                locations=locations)
         ]
     return []
 
@@ -655,8 +740,8 @@ def _GetMessageForMatchingType(input_api, affected_file, line_number, line,
     """
     result = []
 
-    # Ignore comments about banned types.
-    if input_api.re.search(r'^ *//', line):
+    # Ignore comments containing banned strings (but not NOLINT comments).
+    if input_api.re.search(r'^ *//(?! *NOLINT)', line):
         return result
     # A // nocheck comment will bypass this error.
     if line.endswith(' nocheck'):
@@ -687,7 +772,7 @@ def CheckNoBannedPatterns(input_api, output_api):
         if not excluded_paths:
             return False
 
-        local_path = affected_file.UnixLocalPath()
+        local_path = pathlib.Path(affected_file.LocalPath()).as_posix()
         for item in excluded_paths:
             if input_api.re.match(item, local_path):
                 return True

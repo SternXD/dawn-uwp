@@ -133,42 +133,42 @@ namespace dawn {
 
 // https://registry.khronos.org/DataFormat/specs/1.4/dataformat.1.4.html#QUANTIZATION_FULL
 inline constexpr math::Mat4x3f kYCbCrRange_Full = {
-    {1.0, 0.0, 0.0},
-    {0.0, 1.0, 0.0},
-    {0.0, 0.0, 1.0},
-    {0.0, -128.0 / 255.0, -128.0 / 255.0},
+    {1.0f, 0.0f, 0.0f},
+    {0.0f, 1.0f, 0.0f},
+    {0.0f, 0.0f, 1.0f},
+    {0.0f, -128.0f / 255.0f, -128.0f / 255.0f},
 };
 
 // https://registry.khronos.org/DataFormat/specs/1.4/dataformat.1.4.html#QUANTIZATION_NARROW
-constexpr float kYCbCrRange_NarrowYFactor = 255.0 / 219.0;
-constexpr float kYCbCrRange_NarrowChromaFactor = 255.0 / 224.0;
+constexpr float kYCbCrRange_NarrowYFactor = 255.0f / 219.0f;
+constexpr float kYCbCrRange_NarrowChromaFactor = 255.0f / 224.0f;
 constexpr auto kYCbCrRange_Narrow = math::Mat4x3f::FromRows({
-    {kYCbCrRange_NarrowYFactor, 0.0, 0.0, -16.0 / 255.0 * kYCbCrRange_NarrowYFactor},
-    {0.0, kYCbCrRange_NarrowChromaFactor, 0.0, -128.0 / 255.0 * kYCbCrRange_NarrowChromaFactor},
-    {0.0, 0.0, kYCbCrRange_NarrowChromaFactor, -128.0 / 255.0 * kYCbCrRange_NarrowChromaFactor},
+    {kYCbCrRange_NarrowYFactor, 0.0f, 0.0f, -16.0f / 255.0f * kYCbCrRange_NarrowYFactor},
+    {0.0f, kYCbCrRange_NarrowChromaFactor, 0.0f, -128.0f / 255.0f * kYCbCrRange_NarrowChromaFactor},
+    {0.0f, 0.0f, kYCbCrRange_NarrowChromaFactor, -128.0f / 255.0f * kYCbCrRange_NarrowChromaFactor},
 });
 
 // YCbCr to RGB matrices for various standards
 
 // https://registry.khronos.org/DataFormat/specs/1.4/dataformat.1.4.html#MODEL_BT601
 inline constexpr auto kYCbCrToRGB_Rec601 = math::Mat3x3f::FromRows({
-    {1.0, 0.0, 1.402},
-    {1.0, -(0.202008 / 0.587), -(0.419198 / 0.587)},
-    {1.0, 1.772, 0.0},
+    {1.0f, 0.0f, 1.402f},
+    {1.0f, -(0.202008f / 0.587f), -(0.419198f / 0.587f)},
+    {1.0f, 1.772f, 0.0f},
 });
 
 // https://registry.khronos.org/DataFormat/specs/1.4/dataformat.1.4.html#MODEL_BT709
 inline constexpr auto kYCbCrToRGB_Rec709 = math::Mat3x3f::FromRows({
-    {1.0, 0.0, 1.5748},
-    {1.0, -(0.13397432 / 0.7152), -(0.33480248 / 0.7152)},
-    {1.0, 1.8556, 0.0},
+    {1.0f, 0.0f, 1.5748f},
+    {1.0f, -(0.133974f / 0.7152f), -(0.334802f / 0.7152f)},
+    {1.0f, 1.8556f, 0.0f},
 });
 
 // https://registry.khronos.org/DataFormat/specs/1.4/dataformat.1.4.html#MODEL_BT2020
 inline constexpr auto kYCbCrToRGB_Rec2020 = math::Mat3x3f::FromRows({
-    {1.0, 0.0, 1.4746},
-    {1.0, -(0.11156702 / 0.6780), -(0.38737742 / 0.6780)},
-    {1.0, 1.8814, 0.0},
+    {1.0f, 0.0f, 1.4746f},
+    {1.0f, -(0.111567f / 0.678f), -(0.387377f / 0.678f)},
+    {1.0f, 1.8814f, 0.0f},
 });
 
 // RGB to XYZ (D65) for various standards.
@@ -179,17 +179,17 @@ inline constexpr auto kYCbCrToRGB_Rec2020 = math::Mat3x3f::FromRows({
 // https://registry.khronos.org/DataFormat/specs/1.4/dataformat.1.4.html#PRIMARIES_BT601_EBU
 // Rec 601 625-line.
 inline constexpr auto kRGBToXYZ_Rec601 = math::Mat3x3f::FromRows({
-    {0.430554, 0.341550, 0.178352},
-    {0.222004, 0.706655, 0.071341},
-    {0.020182, 0.129553, 0.939322},
+    {0.430554f, 0.341550f, 0.178352f},
+    {0.222004f, 0.706655f, 0.071341f},
+    {0.020182f, 0.129553f, 0.939322f},
 });
 inline constexpr math::Mat3x3f kXYZToRGB_Rec601 = kRGBToXYZ_Rec601.Inverse();
 
 // https://registry.khronos.org/DataFormat/specs/1.4/dataformat.1.4.html#PRIMARIES_BT709
 inline constexpr auto kRGBToXYZ_Rec709 = math::Mat3x3f::FromRows({
-    {0.412391, 0.357584, 0.180481},
-    {0.212639, 0.715169, 0.072192},
-    {0.019331, 0.119195, 0.950532},
+    {0.412391f, 0.357584f, 0.180481f},
+    {0.212639f, 0.715169f, 0.072192f},
+    {0.019331f, 0.119195f, 0.950532f},
 });
 inline constexpr math::Mat3x3f kXYZToRGB_Rec709 = kRGBToXYZ_Rec709.Inverse();
 
@@ -199,17 +199,17 @@ inline constexpr math::Mat3x3f kXYZToRGB_sRGB = kXYZToRGB_Rec709;
 
 // https://registry.khronos.org/DataFormat/specs/1.4/dataformat.1.4.html#PRIMARIES_BT2020
 inline constexpr auto kRGBToXYZ_Rec2020 = math::Mat3x3f::FromRows({
-    {0.636958, 0.144617, 0.168881},
-    {0.262700, 0.677998, 0.059302},
-    {0.000000, 0.028073, 1.060985},
+    {0.636958f, 0.144617f, 0.168881f},
+    {0.262700f, 0.677998f, 0.059302f},
+    {0.000000f, 0.028073f, 1.060985f},
 });
 inline constexpr math::Mat3x3f kXYZToRGB_Rec2020 = kRGBToXYZ_Rec2020.Inverse();
 
 // https://registry.khronos.org/DataFormat/specs/1.4/dataformat.1.4.html#PRIMARIES_BT2020
 inline constexpr auto kRGBToXYZ_DisplayP3 = math::Mat3x3f::FromRows({
-    {0.4865709486, 0.2656676932, 0.1982172852},
-    {0.2289745641, 0.6917385218, 0.0792869141},
-    {0.0000000000, 0.0451133819, 1.0439443689},
+    {0.4865709486f, 0.2656676932f, 0.1982172852f},
+    {0.2289745641f, 0.6917385218f, 0.0792869141f},
+    {0.0000000000f, 0.0451133819f, 1.0439443689f},
 });
 inline constexpr math::Mat3x3f kXYZToRGB_DisplayP3 = kRGBToXYZ_DisplayP3.Inverse();
 
@@ -237,53 +237,65 @@ inline constexpr TransferFunction kEOTF_Identity = {};
 
 // https://registry.khronos.org/DataFormat/specs/1.4/dataformat.1.4.html#TRANSFER_SRGB
 inline constexpr TransferFunction kEOTF_sRGB = {
-    .g = 2.4,
-    .a = 1.0 / 1.055,
-    .b = 0.055 / 1.055,
-    .c = 1.0 / 12.92,
-    .d = 0.04045,
-    .e = 0,
-    .f = 0,
+    .g = 2.4f,
+    .a = 1.0f / 1.055f,
+    .b = 0.055f / 1.055f,
+    .c = 1.0f / 12.92f,
+    .d = 0.04045f,
+    .e = 0.0f,
+    .f = 0.0f,
 };
 inline constexpr TransferFunction kEOTFInverse_sRGB = {
-    .g = 1.0 / 2.4,
-    .a = 1.13711,  // 1.055 ^ 2.4
-    .b = 0,
-    .c = 12.92,
-    .d = 0.0031308,
-    .e = -0.055,
-    .f = 0,
+    .g = 1.0f / 2.4f,
+    .a = 1.13711f,  // 1.055 ^ 2.4
+    .b = 0.0f,
+    .c = 12.92f,
+    .d = 0.0031308f,
+    .e = -0.055f,
+    .f = 0.0f,
+};
+
+// https://registry.khronos.org/DataFormat/specs/1.4/dataformat.1.4.html#TRANSFER_BT1886
+// BT1886 also known as Gamma 2.4
+inline constexpr TransferFunction kEOTF_BT_1886 = {
+    .g = 2.4f,
+    .a = 1.0f,
+    .b = 0.0f,
+    .c = 0.0f,
+    .d = 0.0f,
+    .e = 0.0f,
+    .f = 0.0f,
 };
 
 // https://registry.khronos.org/DataFormat/specs/1.4/dataformat.1.4.html#TRANSFER_DCIP3
 inline constexpr TransferFunction kEOTF_DisplayP3 = {
-    .g = 2.6,
-    .a = 1.0,
-    .b = 0,
-    .c = 0,
-    .d = 0,
-    .e = 0,
-    .f = 0,
+    .g = 2.6f,
+    .a = 1.0f,
+    .b = 0.0f,
+    .c = 0.0f,
+    .d = 0.0f,
+    .e = 0.0f,
+    .f = 0.0f,
 };
 inline constexpr TransferFunction kEOTFInverse_DisplayP3 = {
-    .g = 1.0 / 2.6,
-    .a = 1.0,
-    .b = 0,
-    .c = 0,
-    .d = 0,
-    .e = 0,
-    .f = 0,
+    .g = 1.0f / 2.6f,
+    .a = 1.0f,
+    .b = 0.0f,
+    .c = 0.0f,
+    .d = 0.0f,
+    .e = 0.0f,
+    .f = 0.0f,
 };
 
 // https://registry.khronos.org/DataFormat/specs/1.4/dataformat.1.4.html#TRANSFER_ITU
 inline constexpr TransferFunction kEOTF_SMPTE_170M = {
-    .g = 1.0 / 0.45,
-    .a = 1.0 / 1.099,
-    .b = 0.099 / 1.099,
-    .c = 1.0 / 4.5,
-    .d = 0.0812,
-    .e = 0,
-    .f = 0,
+    .g = 1.0f / 0.45f,
+    .a = 1.0f / 1.099f,
+    .b = 0.099f / 1.099f,
+    .c = 1.0f / 4.5f,
+    .d = 0.0812f,
+    .e = 0.0f,
+    .f = 0.0f,
 };
 
 // Luminance values of various color spaces for the white of value "1" after the transfer function.

@@ -151,7 +151,7 @@ static constexpr std::array<uint8_t, 24> kPiCycleIndices = []() {
     uint32_t x = 1;
     uint32_t y = 0;
     for (size_t i = 0; i < cycleIndices.size(); i++) {
-        cycleIndices[i] = x + 5 * y;
+        cycleIndices[i] = static_cast<uint8_t>(x + 5 * y);
         uint32_t previousX = x;
         uint32_t previousY = y;
         x = nextX[previousX + 5 * previousY];
@@ -202,7 +202,7 @@ static constexpr std::array<bool, 256> kRoundConstantsBits = []() {
     uint8_t R = 1;
 
     // Step 3
-    for (int i = 1; i < 256; i++) {
+    for (uint32_t i = 1; i < 256; i++) {
         bool R8 = R & (0x80);
         // Step 3a, 3f
         R <<= 1;

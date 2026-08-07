@@ -349,7 +349,7 @@ MaybeError RenderPipeline::InitializeInputLayout(const Blob& vertexShader) {
 
         const VertexBufferInfo& input = GetVertexBuffer(attribute.vertexBufferSlot);
 
-        inputElementDescriptor.AlignedByteOffset = attribute.offset;
+        inputElementDescriptor.AlignedByteOffset = checked_cast<UINT>(attribute.offset);
         inputElementDescriptor.InputSlotClass = VertexStepModeFunction(input.stepMode);
         if (inputElementDescriptor.InputSlotClass == D3D11_INPUT_PER_VERTEX_DATA) {
             inputElementDescriptor.InstanceDataStepRate = 0;
@@ -400,7 +400,8 @@ MaybeError RenderPipeline::InitializeBlendState() {
             rtBlendDesc.DestBlendAlpha = D3DBlendAlphaFactor(descriptor->blend->alpha.dstFactor);
             rtBlendDesc.BlendOpAlpha = D3DBlendOperation(descriptor->blend->alpha.operation);
         }
-        rtBlendDesc.RenderTargetWriteMask = D3DColorWriteMask(descriptor->writeMask);
+        rtBlendDesc.RenderTargetWriteMask =
+            dchecked_cast<UINT8>(D3DColorWriteMask(descriptor->writeMask));
     }
 
     DAWN_TRY(CheckHRESULT(device->GetD3D11Device()->CreateBlendState(&blendDesc, &mBlendState),
@@ -474,13 +475,20 @@ MaybeError RenderPipeline::InitializeShaders() {
             additionalCompileFlags |= D3DCOMPILE_IEEE_STRICTNESS;
         }
 
-        const bool kApplySampleMaskPolyfill = false;
+        std::vector<uint32_t> snorm10_10_10_2_locations;
+        for (VertexAttributeLocation location : GetAttributeLocationsUsed()) {
+            if (GetAttribute(location).format == wgpu::VertexFormat::Snorm10_10_10_2) {
+                snorm10_10_10_2_locations.push_back(
+                    static_cast<uint32_t>(static_cast<uint8_t>(location)));
+            }
+        }
+
         DAWN_TRY_ASSIGN(
             compiledShader[SingleShaderStage::Vertex],
             ToBackend(programmableStage.module)
                 ->Compile(programmableStage, SingleShaderStage::Vertex, ToBackend(GetLayout()),
                           compileFlags | additionalCompileFlags, GetImmediateMask(),
-                          kApplySampleMaskPolyfill, usedInterstageVariables));
+                          usedInterstageVariables, {}, std::move(snorm10_10_10_2_locations)));
         const Blob& shaderBlob = compiledShader[SingleShaderStage::Vertex].shaderBlob;
         {
             TRACE_EVENT0(device->GetPlatform(), General, "RenderPipelineD3D11::CreateVertexShader");
@@ -510,7 +518,7 @@ MaybeError RenderPipeline::InitializeShaders() {
             // allocate register u60 to u63 for them.
             const uint32_t basePixelLocalAttachmentIndex =
                 uavEndIndex - static_cast<uint32_t>(storageAttachmentSlots.size());
-            for (size_t i = 0; i < storageAttachmentSlots.size(); i++) {
+            for (uint32_t i = 0; i < storageAttachmentSlots.size(); i++) {
                 auto& attachment = pixelLocalOptions->attachments[i];
                 attachment.index = basePixelLocalAttachmentIndex + i;
 
@@ -546,15 +554,12 @@ MaybeError RenderPipeline::InitializeShaders() {
             additionalCompileFlags |= D3DCOMPILE_IEEE_STRICTNESS;
         }
 
-        // This must be accurate in determining when Sample Shading is active.
-        // It cannot be conservatively correct because the polyfill changes behavior.
-        bool applySampleMaskPolyfill = UsesSampleMaskInput() && UseSampleRateShading();
         DAWN_TRY_ASSIGN(
             compiledShader[SingleShaderStage::Fragment],
             ToBackend(programmableStage.module)
                 ->Compile(programmableStage, SingleShaderStage::Fragment, ToBackend(GetLayout()),
                           compileFlags | additionalCompileFlags, GetImmediateMask(),
-                          applySampleMaskPolyfill, usedInterstageVariables, pixelLocalOptions));
+                          usedInterstageVariables, pixelLocalOptions));
         {
             TRACE_EVENT0(device->GetPlatform(), General, "RenderPipelineD3D11::CreatePixelShader");
             SCOPED_DAWN_HISTOGRAM_TIMER_MICROS(device->GetPlatform(), "D3D11.CreatePixelShaderUs");

@@ -116,6 +116,8 @@ enum class DeviceExt : uint32_t {
     MultisampledRenderToSingleSampled,
     PhysicalDeviceDrm,
     RasterizationOrderAttachmentAccess,
+    MaximalReconvergence,
+    SubgroupUniformControlFlow,
 
     // External* extensions
     ExternalMemoryAndroidHardwareBuffer,

@@ -34,6 +34,7 @@
 #include <vector>
 
 #include "dawn/platform/DawnPlatform.h"
+#include "src/dawn/common/Enumerator.h"
 #include "src/dawn/common/GPUInfo.h"
 #include "src/dawn/native/ChainUtils.h"
 #include "src/dawn/native/Error.h"
@@ -49,6 +50,7 @@
 #include "src/dawn/native/vulkan/VulkanError.h"
 #include "src/utils/assert.h"
 #include "src/utils/compiler.h"
+#include "src/utils/numeric.h"
 
 #if DAWN_PLATFORM_IS(ANDROID)
 #include "src/dawn/native/AHBFunctions.h"
@@ -114,6 +116,21 @@ bool VKComponentTypeToWGPUSubgroupMatrixComponentType(
         default:
             return false;
     }
+}
+
+template <std::integral T, std::integral U>
+constexpr bool SafeLessThan(T a, U b) {
+    return std::cmp_less(a, b);
+}
+
+template <std::integral T>
+constexpr bool SafeLessThan(float a, T b) {
+    return static_cast<double>(a) < static_cast<double>(b);
+}
+
+template <std::integral T, std::integral U>
+constexpr bool SafeGreaterThan(T a, U b) {
+    return std::cmp_greater(a, b);
 }
 
 }  // anonymous namespace
@@ -265,6 +282,7 @@ void PhysicalDevice::InitializeSupportedFeaturesImpl() {
     EnableFeature(Feature::StaticSamplers);
     EnableFeature(Feature::FlexibleTextureViews);
     EnableFeature(Feature::DawnDeviceAllocatorControl);
+    EnableFeature(Feature::TextureCompressionUnaligned);
 
     // Initialize supported extensions
     if (mDeviceInfo.features.textureCompressionBC == VK_TRUE) {
@@ -724,39 +742,46 @@ MaybeError PhysicalDevice::InitializeSupportedLimitsInternal(wgpu::FeatureLevel 
 
     const VkPhysicalDeviceLimits& vkLimits = mDeviceInfo.properties.limits;
 
-#define CHECK_AND_SET_V1_LIMIT_IMPL(vulkanName, webgpuName, compareOp, msgSegment)   \
+#define CHECK_V1_LIMIT_IMPL(vulkanName, webgpuName, compareOp, msgSegment)           \
     do {                                                                             \
-        if (vkLimits.vulkanName compareOp baseLimits.v1.webgpuName) {                \
+        if (Safe##compareOp(vkLimits.vulkanName, baseLimits.v1.webgpuName)) {        \
             return DAWN_INTERNAL_ERROR("Insufficient Vulkan limits for " #webgpuName \
                                        "."                                           \
                                        " VkPhysicalDeviceLimits::" #vulkanName       \
                                        " must be at " msgSegment " " +               \
                                        std::to_string(baseLimits.v1.webgpuName));    \
         }                                                                            \
-        limits->v1.webgpuName = vkLimits.vulkanName;                                 \
     } while (false)
 
+#define CHECK_AND_SET_V1_LIMIT_IMPL(vulkanName, webgpuName, compareOp, msgSegment) \
+    do {                                                                           \
+        CHECK_V1_LIMIT_IMPL(vulkanName, webgpuName, compareOp, msgSegment);        \
+        limits->v1.webgpuName = dchecked_cast<uint32_t>(vkLimits.vulkanName);      \
+    } while (false)
+
+#define CHECK_V1_MAX_LIMIT(vulkanName, webgpuName) \
+    CHECK_V1_LIMIT_IMPL(vulkanName, webgpuName, LessThan, "least")
 #define CHECK_AND_SET_V1_MAX_LIMIT(vulkanName, webgpuName) \
-    CHECK_AND_SET_V1_LIMIT_IMPL(vulkanName, webgpuName, <, "least")
+    CHECK_AND_SET_V1_LIMIT_IMPL(vulkanName, webgpuName, LessThan, "least")
 #define CHECK_AND_SET_V1_MIN_LIMIT(vulkanName, webgpuName) \
-    CHECK_AND_SET_V1_LIMIT_IMPL(vulkanName, webgpuName, >, "most")
+    CHECK_AND_SET_V1_LIMIT_IMPL(vulkanName, webgpuName, GreaterThan, "most")
 
     CHECK_AND_SET_V1_MAX_LIMIT(maxImageDimension1D, maxTextureDimension1D);
 
-    CHECK_AND_SET_V1_MAX_LIMIT(maxImageDimension2D, maxTextureDimension2D);
-    CHECK_AND_SET_V1_MAX_LIMIT(maxImageDimensionCube, maxTextureDimension2D);
-    CHECK_AND_SET_V1_MAX_LIMIT(maxFramebufferWidth, maxTextureDimension2D);
-    CHECK_AND_SET_V1_MAX_LIMIT(maxFramebufferHeight, maxTextureDimension2D);
-    CHECK_AND_SET_V1_MAX_LIMIT(maxViewportDimensions[0], maxTextureDimension2D);
-    CHECK_AND_SET_V1_MAX_LIMIT(maxViewportDimensions[1], maxTextureDimension2D);
-    CHECK_AND_SET_V1_MAX_LIMIT(viewportBoundsRange[1], maxTextureDimension2D);
+    CHECK_V1_MAX_LIMIT(maxImageDimension2D, maxTextureDimension2D);
+    CHECK_V1_MAX_LIMIT(maxImageDimensionCube, maxTextureDimension2D);
+    CHECK_V1_MAX_LIMIT(maxFramebufferWidth, maxTextureDimension2D);
+    CHECK_V1_MAX_LIMIT(maxFramebufferHeight, maxTextureDimension2D);
+    CHECK_V1_MAX_LIMIT(maxViewportDimensions[0], maxTextureDimension2D);
+    CHECK_V1_MAX_LIMIT(maxViewportDimensions[1], maxTextureDimension2D);
+    CHECK_V1_MAX_LIMIT(viewportBoundsRange[1], maxTextureDimension2D);
     limits->v1.maxTextureDimension2D = std::min({
-        static_cast<uint32_t>(vkLimits.maxImageDimension2D),
-        static_cast<uint32_t>(vkLimits.maxImageDimensionCube),
-        static_cast<uint32_t>(vkLimits.maxFramebufferWidth),
-        static_cast<uint32_t>(vkLimits.maxFramebufferHeight),
-        static_cast<uint32_t>(vkLimits.maxViewportDimensions[0]),
-        static_cast<uint32_t>(vkLimits.maxViewportDimensions[1]),
+        vkLimits.maxImageDimension2D,
+        vkLimits.maxImageDimensionCube,
+        vkLimits.maxFramebufferWidth,
+        vkLimits.maxFramebufferHeight,
+        vkLimits.maxViewportDimensions[0],
+        vkLimits.maxViewportDimensions[1],
         static_cast<uint32_t>(vkLimits.viewportBoundsRange[1]),
     });
 
@@ -978,13 +1003,14 @@ void PhysicalDevice::SetupBackendAdapterToggles(dawn::platform::Platform* platfo
     // because they affect whether or not the MSAARenderToSingleSampled feature is available.
 
     // Use dynamic rendering by default if the corresponding extension is available.
-    // Also disable on older Intel devices and ARM Mali-G68 devices which have been observed to have
-    // driver issues with the dynamic rendering path.
+    // Also disable on older Intel devices, ARM Mali-G68 devices, and PowerVR devices, all of which
+    // have been observed to have driver issues with the dynamic rendering path.
     if (!GetDeviceInfo().HasExt(DeviceExt::DynamicRendering) ||
         GetDeviceInfo().dynamicRenderingFeatures.dynamicRendering == VK_FALSE ||
         (gpu_info::IsIntel(GetVendorId()) &&
          gpu_info::GetIntelGen(GetVendorId(), GetDeviceId()) <= gpu_info::IntelGen::Gen9) ||
-        (gpu_info::IsARM(GetVendorId()) && gpu_info::IsMaliG68(GetDeviceId()))) {
+        (gpu_info::IsARM(GetVendorId()) && gpu_info::IsMaliG68(GetDeviceId())) ||
+        gpu_info::IsImgTec(GetVendorId())) {
         adapterToggles->ForceSet(Toggle::VulkanUseDynamicRendering, false);
     } else {
         adapterToggles->Default(Toggle::VulkanUseDynamicRendering, true);
@@ -1047,8 +1073,12 @@ void PhysicalDevice::SetupBackendDeviceToggles(dawn::platform::Platform* platfor
     }
 
     if (MayBeImaginationProprietary()) {
-        // crbug.com/443906252: Polyfill for case switch with large ranges.
+        // crbug.com/443906252 - Polyfill for case switch with large ranges.
         deviceToggles->Default(Toggle::VulkanPolyfillSwitchWithIf, true);
+
+        // crbug.com/540087398 - Driver bug miscomputes mip sizes for NPOT depth/stencil textures.
+        // TODO(https://crbug.com/540087398): Limit this to old drivers once there's a driver fix.
+        deviceToggles->Default(Toggle::VulkanDisallowNPOTDepthStencilMipmaps, true);
     }
 
     // AMD Mesa front end optimizer bug for unary negation and abs.
@@ -1083,10 +1113,22 @@ void PhysicalDevice::SetupBackendDeviceToggles(dawn::platform::Platform* platfor
         // instructions as matrix elements instead of a source/dest pointee elements.
         // See crbug.com/460209126
         deviceToggles->Default(Toggle::VulkanCooperativeMatrixStrideIsMatrixElements, true);
+
+        // dawn:500417361
+        // TODO: Add details once available.
+        deviceToggles->Default(Toggle::VulkanSleepAfterLostDeviceWait, true);
     }
 
     if (IsAndroidSamsung() || IsAndroidQualcomm() || IsAndroidHuawei()) {
         deviceToggles->Default(Toggle::IgnoreImportedAHardwareBufferVulkanImageSize, true);
+    }
+
+    if (gpu_info::IsHuaweiMaleoon(GetVendorId(), GetDeviceId())) {
+        // crbug.com/520126486: Huawei Maleoon drivers mis-stride multi-layer
+        // buffer<->image copies: only the first array layer / depth slice lands at
+        // the correct buffer offset when a copy region has layerCount > 1.
+        // Split such copies into one region per layer.
+        deviceToggles->Default(Toggle::VulkanSplitBufferTextureCopyForArrayLayers, true);
     }
 
     // Collapse redundant subgroup min and max operations to workaround a driver crash on some AMD
@@ -1095,6 +1137,14 @@ void PhysicalDevice::SetupBackendDeviceToggles(dawn::platform::Platform* platfor
     // https://crbug.com/508265321.
     if (IsWindowsAMD()) {
         deviceToggles->Default(Toggle::CollapseSubgroupMinMax, true);
+    }
+
+    if (IsAndroidSamsung()) {
+        // Samsung Xclipse GPUs implement workgroup atomicStore incorrectly.
+        // TODO(crbug.com/487773864): If newer driver version without bug is released then we can
+        // gate this on driver version.
+        // https://crbug.com/487773864
+        deviceToggles->Default(Toggle::VulkanReplaceWorkgroupAtomicStoreWithExchange, true);
     }
 
     if (IsSwiftshader()) {
@@ -1264,6 +1314,27 @@ void PhysicalDevice::SetupBackendDeviceToggles(dawn::platform::Platform* platfor
             platform->IsFeatureEnabled(platform::Features::kWebGPUUseSpirv14) && !IsAndroidARM());
     } else {
         deviceToggles->ForceSet(Toggle::UseSpirv14, false);
+    }
+
+    // TODO(b/379673383): Disabled on Pixel10 devices.
+    if (GetDeviceInfo().HasExt(DeviceExt::MaximalReconvergence) &&
+        GetDeviceInfo().shaderMaximalReconvergenceFeatures.shaderMaximalReconvergence == VK_TRUE &&
+        !IsAndroidImgTec()) {
+        deviceToggles->Default(
+            Toggle::UseSpirvReconvergenceMode,
+            platform->IsFeatureEnabled(platform::Features::kWebGPUUseSpirvReconvergenceMode));
+    } else if (GetDeviceInfo().HasExt(DeviceExt::SubgroupUniformControlFlow) &&
+               GetDeviceInfo()
+                       .shaderSubgroupUniformControlFlowFeatures.shaderSubgroupUniformControlFlow ==
+                   VK_TRUE &&
+               (mDeviceInfo.subgroupProperties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) &&
+               (mDeviceInfo.subgroupProperties.supportedStages & VK_SHADER_STAGE_FRAGMENT_BIT) &&
+               !IsAndroidImgTec()) {
+        deviceToggles->Default(
+            Toggle::UseSpirvReconvergenceMode,
+            platform->IsFeatureEnabled(platform::Features::kWebGPUUseSpirvReconvergenceMode));
+    } else {
+        deviceToggles->ForceSet(Toggle::UseSpirvReconvergenceMode, false);
     }
 
     // Vulkan waiting is already thread safe.
@@ -1625,35 +1696,30 @@ const AHBFunctions* PhysicalDevice::GetOrLoadAHBFunctions() {
 void PhysicalDevice::PopulateBackendProperties(UnpackedPtr<AdapterInfo>& info,
                                                const TogglesState& toggles) const {
     if (auto* memoryHeapProperties = info.Get<AdapterPropertiesMemoryHeaps>()) {
-        size_t count = mDeviceInfo.memoryHeaps.size();
-        auto* heapInfo = new MemoryHeapInfo[count];
-        memoryHeapProperties->heapCount = count;
-        memoryHeapProperties->heapInfo = heapInfo;
+        auto heapInfo = HeapArray<MemoryHeapInfo>(mDeviceInfo.memoryHeaps.size());
 
-        for (size_t i = 0; i < count; ++i) {
-            DAWN_UNSAFE_TODO(heapInfo[i]).size = mDeviceInfo.memoryHeaps[i].size;
-            DAWN_UNSAFE_TODO(heapInfo[i]).properties = {};
+        for (auto [i, heap] : Enumerate(heapInfo)) {
+            heap.size = mDeviceInfo.memoryHeaps[i].size;
+            heap.properties = {};
             if (mDeviceInfo.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
-                DAWN_UNSAFE_TODO(heapInfo[i]).properties |= wgpu::HeapProperty::DeviceLocal;
+                heap.properties |= wgpu::HeapProperty::DeviceLocal;
             }
         }
         for (const auto& memoryType : mDeviceInfo.memoryTypes) {
             if (memoryType.propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) {
-                DAWN_UNSAFE_TODO(heapInfo[memoryType.heapIndex]).properties |=
-                    wgpu::HeapProperty::HostVisible;
+                heapInfo[memoryType.heapIndex].properties |= wgpu::HeapProperty::HostVisible;
             }
             if (memoryType.propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) {
-                DAWN_UNSAFE_TODO(heapInfo[memoryType.heapIndex]).properties |=
-                    wgpu::HeapProperty::HostCoherent;
+                heapInfo[memoryType.heapIndex].properties |= wgpu::HeapProperty::HostCoherent;
             }
             if (memoryType.propertyFlags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) {
-                DAWN_UNSAFE_TODO(heapInfo[memoryType.heapIndex]).properties |=
-                    wgpu::HeapProperty::HostCached;
+                heapInfo[memoryType.heapIndex].properties |= wgpu::HeapProperty::HostCached;
             } else {
-                DAWN_UNSAFE_TODO(heapInfo[memoryType.heapIndex]).properties |=
-                    wgpu::HeapProperty::HostUncached;
+                heapInfo[memoryType.heapIndex].properties |= wgpu::HeapProperty::HostUncached;
             }
         }
+
+        memoryHeapProperties->heapInfo = std::move(heapInfo).MoveToSpan();
     }
     if (auto* vkProperties = info.Get<AdapterPropertiesVk>()) {
         vkProperties->driverVersion = mDeviceInfo.properties.driverVersion;
@@ -1661,20 +1727,17 @@ void PhysicalDevice::PopulateBackendProperties(UnpackedPtr<AdapterInfo>& info,
     if (auto* drmProperties = info.Get<AdapterPropertiesDrm>()) {
         drmProperties->hasPrimary = mDeviceInfo.drmProperties.hasPrimary;
         drmProperties->hasRender = mDeviceInfo.drmProperties.hasRender;
-        drmProperties->primaryMajor = mDeviceInfo.drmProperties.primaryMajor;
-        drmProperties->primaryMinor = mDeviceInfo.drmProperties.primaryMinor;
-        drmProperties->renderMajor = mDeviceInfo.drmProperties.renderMajor;
-        drmProperties->renderMinor = mDeviceInfo.drmProperties.renderMinor;
+        // TODO(crbug.com/42240462): Ideally these would be declared as int64_t in dawn.json to
+        // match the Vulkan structs, but at the time of this comment that wasn't supported yet.
+        drmProperties->primaryMajor = sign_dcast(mDeviceInfo.drmProperties.primaryMajor);
+        drmProperties->primaryMinor = sign_dcast(mDeviceInfo.drmProperties.primaryMinor);
+        drmProperties->renderMajor = sign_dcast(mDeviceInfo.drmProperties.renderMajor);
+        drmProperties->renderMinor = sign_dcast(mDeviceInfo.drmProperties.renderMinor);
     }
     if (auto* subgroupMatrixConfigs = info.Get<AdapterPropertiesSubgroupMatrixConfigs>()) {
         std::vector<SubgroupMatrixConfig> supportedConfigs =
             EnumerateSubgroupMatrixConfigs(toggles);
-        size_t count = supportedConfigs.size();
-        SubgroupMatrixConfig* configs = new SubgroupMatrixConfig[count];
-        subgroupMatrixConfigs->configs = configs;
-        subgroupMatrixConfigs->configCount = supportedConfigs.size();
-        DAWN_UNSAFE_TODO(
-            memcpy(configs, supportedConfigs.data(), count * sizeof(SubgroupMatrixConfig)));
+        subgroupMatrixConfigs->configs = HeapArrayFrom(supportedConfigs).MoveToSpan();
     }
 }
 
@@ -1684,22 +1747,19 @@ void PhysicalDevice::PopulateBackendFormatCapabilities(
     if (auto* drmCapabilities = capabilities.Get<DawnDrmFormatCapabilities>()) {
         auto vk_format = ColorVulkanImageFormat(format);
         if (vk_format == VK_FORMAT_UNDEFINED) {
-            drmCapabilities->properties = nullptr;
-            drmCapabilities->propertiesCount = 0;
+            drmCapabilities->properties = {};
         }
         auto drmFormatModifiers =
             GetFormatModifierProps(mVulkanInstance->GetFunctions(), mVkPhysicalDevice, vk_format);
         if (!drmFormatModifiers.empty()) {
-            size_t count = drmFormatModifiers.size();
-            auto* properties = new DawnDrmFormatProperties[count];
-            drmCapabilities->properties = properties;
-            drmCapabilities->propertiesCount = count;
+            auto properties = HeapArray<DawnDrmFormatProperties>(drmFormatModifiers.size());
 
-            for (size_t i = 0; i < count; i++) {
-                DAWN_UNSAFE_TODO(properties[i]).modifier = drmFormatModifiers[i].drmFormatModifier;
-                DAWN_UNSAFE_TODO(properties[i]).modifierPlaneCount =
-                    drmFormatModifiers[i].drmFormatModifierPlaneCount;
+            for (auto [i, property] : Enumerate(properties)) {
+                property.modifier = drmFormatModifiers[i].drmFormatModifier;
+                property.modifierPlaneCount = drmFormatModifiers[i].drmFormatModifierPlaneCount;
             }
+
+            drmCapabilities->properties = std::move(properties).MoveToSpan();
         }
     }
 }

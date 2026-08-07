@@ -79,11 +79,11 @@ tint_target_add_external_dependencies(tint_lang_glsl_writer lib
 )
 
 endif(TINT_BUILD_GLSL_WRITER)
-if(TINT_BUILD_GLSL_WRITER AND TINT_BUILD_GLSL_VALIDATOR)
+if(TINT_BUILD_GLSL_VALIDATOR AND TINT_BUILD_GLSL_WRITER)
 ################################################################################
 # Target:    tint_lang_glsl_writer_test
 # Kind:      test
-# Condition: TINT_BUILD_GLSL_WRITER AND TINT_BUILD_GLSL_VALIDATOR
+# Condition: TINT_BUILD_GLSL_VALIDATOR AND TINT_BUILD_GLSL_WRITER
 ################################################################################
 tint_add_target(tint_lang_glsl_writer_test test
   lang/glsl/writer/access_test.cc
@@ -135,12 +135,12 @@ tint_target_add_external_dependencies(tint_lang_glsl_writer_test test
   "src_utils"
 )
 
-endif(TINT_BUILD_GLSL_WRITER AND TINT_BUILD_GLSL_VALIDATOR)
-if(TINT_BUILD_GLSL_WRITER)
+endif(TINT_BUILD_GLSL_VALIDATOR AND TINT_BUILD_GLSL_WRITER)
+if(TINT_BUILD_FUZZERS AND TINT_BUILD_GLSL_WRITER)
 ################################################################################
 # Target:    tint_lang_glsl_writer_fuzz
 # Kind:      fuzz
-# Condition: TINT_BUILD_GLSL_WRITER
+# Condition: TINT_BUILD_FUZZERS AND TINT_BUILD_GLSL_WRITER
 ################################################################################
 tint_add_target(tint_lang_glsl_writer_fuzz fuzz
   lang/glsl/writer/writer_fuzz.cc
@@ -176,4 +176,4 @@ tint_target_add_external_dependencies(tint_lang_glsl_writer_fuzz fuzz
   "src_utils"
 )
 
-endif(TINT_BUILD_GLSL_WRITER)
+endif(TINT_BUILD_FUZZERS AND TINT_BUILD_GLSL_WRITER)

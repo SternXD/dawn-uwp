@@ -122,9 +122,24 @@ struct State {
                 TINT_CHECK_RESULT_UNWRAP(array_length,
                                          NumBaseElementsChecked(var_ty->StoreType(), var));
 
-                array_length =
-                    std::max(array_length, options.minimum_array_size / BaseEleType()->Size());
+                // For the immediate address space, minimum_array_size is the exact byte size of the
+                // push constant range reserved by the pipeline. The store type's own Size() may be
+                // larger because a struct rounds up to its member alignment (e.g. a struct holding
+                // a vec4 has 16-byte alignment, so 24 bytes of content report a size of 32). Using
+                // that padded size would emit a block larger than the reserved range and fail
+                // Vulkan push constant validation, so cap the immediate array at the reserved size.
+                if (options.immediate && options.minimum_array_size > 0) {
+                    array_length = options.minimum_array_size / BaseEleType()->Size();
+                } else {
+                    array_length =
+                        std::max(array_length, options.minimum_array_size / BaseEleType()->Size());
+                }
                 array_ty = ty.array(BaseEleType(), array_length);
+            }
+
+            if (var_ty->AddressSpace() == core::AddressSpace::kImmediate &&
+                !options.allow_dynamic_immediate_indices) {
+                RewriteDynamicIndices(var);
             }
 
             auto usage_worklist = result->UsagesSorted();
@@ -166,6 +181,10 @@ struct State {
                             case core::BuiltinFn::kBufferView:
                             case core::BuiltinFn::kBufferArrayView:
                                 BufferView(call, var, var_ty->StoreType(), {});
+                                break;
+                            case core::BuiltinFn::kSubgroupMatrixLoad:
+                            case core::BuiltinFn::kSubgroupMatrixStore:
+                                SubgroupMatrixAccess(call, var, {});
                                 break;
                             default:
                                 TINT_IR_UNREACHABLE(ir);
@@ -297,9 +316,21 @@ struct State {
                             }
                         }
                         if (auto* call = inst->As<core::ir::CoreBuiltinCall>()) {
-                            if (call->Func() == core::BuiltinFn::kArrayLength) {
+                            // TODO(b/541591251): When array requirements are relaxed, subgroup
+                            // matrix load/store shouldn't need to impose a limit here.
+                            if (call->Func() == core::BuiltinFn::kArrayLength ||
+                                call->Func() == core::BuiltinFn::kSubgroupMatrixLoad ||
+                                call->Func() == core::BuiltinFn::kSubgroupMatrixStore) {
                                 auto* ptr_ty = call->Args()[0]->Type()->As<type::Pointer>();
                                 return SmallestElementSize(ptr_ty->StoreType());
+                            } else if (call->Func() == core::BuiltinFn::kBufferLength) {
+                                auto* buf =
+                                    var->Result()->Type()->UnwrapPtr()->As<core::type::Buffer>();
+                                if (buf->Count()->Is<core::type::RuntimeArrayCount>()) {
+                                    // Buffers in WebGPU must be a multiple of 4 so we cannot
+                                    // use a larger size than that.
+                                    return 4u;
+                                }
                             }
                         }
                         return size;
@@ -325,6 +356,7 @@ struct State {
         if (size == 2 || size == 6) {
             // 6 == vec3h so we must use a 2-byte type to be safe.
             base_ty_ = ty.u16();
+            ir.properties.Add(Property::kAllow16BitIntegers);
         } else if (size < 8 || size == 12) {
             // 12 == vec3u so we must use a 4-byte type to be safe.
             base_ty_ = ty.u32();
@@ -470,6 +502,125 @@ struct State {
         return data.byte_length != 0 || data.byte_length_expr != nullptr;
     }
 
+    // Rewrites uses of var that contain a dynamic index.
+    // Only necessary for immediate variables so the set of potential instructions is considerably
+    // limited.
+    void RewriteDynamicIndices(core::ir::Var* var) {
+        TINT_IR_ASSERT(ir, var->Result()->Type()->As<core::type::Pointer>()->AddressSpace() ==
+                               core::AddressSpace::kImmediate);
+        auto worklist = var->Result()->UsagesSorted();
+        while (!worklist.IsEmpty()) {
+            auto usage = worklist.Pop();
+            tint::Switch(
+                usage.instruction,
+                [&](core::ir::Access* a) {
+                    Vector<Value*, 4> const_indices;
+                    Vector<Value*, 4> non_const_indices;
+                    const core::type::Type* type = a->Object()->Type()->UnwrapPtr();
+                    for (auto* idx_value : a->Indices()) {
+                        if (!idx_value->Is<core::ir::Constant>() || !non_const_indices.IsEmpty()) {
+                            non_const_indices.Push(idx_value);
+                        } else {
+                            const_indices.Push(idx_value);
+                            tint::Switch(
+                                type,  //
+                                [&](const core::type::Struct* s) {
+                                    auto* cnst = idx_value->As<core::ir::Constant>();
+
+                                    // A struct index must be a constant
+                                    TINT_IR_ASSERT(ir, cnst);
+
+                                    uint32_t idx = cnst->Value()->ValueAs<uint32_t>();
+                                    auto* mem = s->Members()[idx];
+                                    type = mem->Type();
+                                },
+                                [&](const core::type::Array*) { TINT_IR_ASSERT(ir, false); },
+                                [&](const core::type::Matrix* m) { type = m->ColumnType(); },
+                                [&](const core::type::Vector* v) { type = v->Type(); },
+                                TINT_ICE_ON_NO_MATCH);
+                        }
+                    }
+                    if (!non_const_indices.IsEmpty()) {
+                        Materialize(a, type, const_indices, non_const_indices);
+                        a->Destroy();
+                    }
+                },
+                [&](core::ir::LoadVectorElement* lve) {
+                    if (!lve->Index()->Is<core::ir::Constant>()) {
+                        b.InsertBefore(lve, [&] {
+                            auto* load = b.Load(lve->From());
+                            b.AccessWithResult(lve->DetachResult(), load, lve->Index());
+                        });
+                        lve->Destroy();
+                    }
+                },
+                [&](core::ir::Let* let) {
+                    for (auto& use : let->Result()->UsagesSorted()) {
+                        worklist.Push(use);
+                    }
+                },
+                TINT_ICE_ON_NO_MATCH);
+        }
+    }
+
+    // Materialize access a that contains at least one non-constant index and update its uses.
+    // Splits a into:
+    // %const_a = access %a->Object(), %const_indices
+    // %load = load %const_a
+    // %non_const_a = access %load, %non_const_indices
+    //
+    // Uses of %a are then based on the value %non_const_a (no longer a pointer).
+    void Materialize(core::ir::Access* a,
+                     const core::type::Type* const_type,
+                     VectorRef<core::ir::Value*> const_indices,
+                     VectorRef<core::ir::Value*> non_const_indices) {
+        core::ir::Value* const_access = nullptr;
+        core::ir::Value* materialized = nullptr;
+        b.InsertBefore(a, [&] {
+            const_access = b.Access(ty.ptr(core::AddressSpace::kImmediate, const_type), a->Object(),
+                                    const_indices)
+                               ->Result();
+            materialized = b.Load(const_access)->Result();
+            if (!non_const_indices.IsEmpty()) {
+                materialized =
+                    b.Access(a->Result()->Type()->UnwrapPtr(), materialized, non_const_indices)
+                        ->Result();
+            }
+        });
+        a->Result()->ReplaceAllUsesWith(materialized);
+
+        // Accesses on values get handled by VarForDynamicIndex if necessary.
+        auto worklist = materialized->UsagesSorted();
+        while (!worklist.IsEmpty()) {
+            auto usage = worklist.Pop();
+            tint::Switch(
+                usage.instruction,
+                [&](core::ir::Access* sub_access) {
+                    sub_access->Result()->SetType(sub_access->Result()->Type()->UnwrapPtr());
+                    for (auto& use : sub_access->Result()->UsagesSorted()) {
+                        worklist.Push(use);
+                    }
+                },
+                [&](core::ir::Let* let) {
+                    let->Result()->SetType(let->Result()->Type()->UnwrapPtr());
+                    for (auto& use : let->Result()->UsagesSorted()) {
+                        worklist.Push(use);
+                    }
+                },
+                [&](core::ir::Load* load) {
+                    load->Result()->ReplaceAllUsesWith(load->From());
+                    load->Destroy();
+                },
+                [&](core::ir::LoadVectorElement* lve) {
+                    b.InsertBefore(lve, [&] {
+                        b.AccessWithResult(lve->DetachResult(), lve->From(), lve->Index());
+                    });
+                    lve->Destroy();
+                },
+                TINT_ICE_ON_NO_MATCH);
+        }
+    }
+
     void Access(core::ir::Access* a,
                 core::ir::Var* var,
                 const core::type::Type* obj_ty,
@@ -589,10 +740,58 @@ struct State {
                     if (call->Func() == core::BuiltinFn::kArrayLength) {
                         ArrayLength(call, var, obj_ty, offset);
                     }
+                    if (call->Func() == core::BuiltinFn::kSubgroupMatrixLoad ||
+                        call->Func() == core::BuiltinFn::kSubgroupMatrixStore) {
+                        SubgroupMatrixAccess(call, var, offset);
+                    }
                 },
                 TINT_ICE_ON_NO_MATCH);
         }
         inst->Destroy();
+    }
+
+    void SubgroupMatrixAccess(core::ir::CoreBuiltinCall* call,
+                              core::ir::Var* var,
+                              OffsetData offset) {
+        // TODO(b/529415904): Remove after migrating. For now only support non-deprecated versions.
+        TINT_IR_ASSERT(ir, (call->Func() == core::BuiltinFn::kSubgroupMatrixLoad &&
+                            call->ExplicitTemplateParams().Length() == 2) ||
+                               (call->Func() == core::BuiltinFn::kSubgroupMatrixStore &&
+                                call->ExplicitTemplateParams().Length() == 1));
+        b.InsertBefore(call, [&] {
+            // Incoming offset in terms of base array type.
+            auto* byte_idx = OffsetToValue(offset);
+            auto* incoming_offset = b.Divide(byte_idx, u32(BaseEleType()->Size()))->Result();
+
+            // Access offset adjusted to base array type.
+            auto* call_offset = call->Args()[1];
+            auto* array_ty = call->Args()[0]->Type()->UnwrapPtr()->As<core::type::Array>();
+            auto* call_ele_type = array_ty->ElemType();
+            TINT_IR_ASSERT(ir, BaseEleType()->Size() <= call_ele_type->Size());
+            if (call_ele_type->Size() != BaseEleType()->Size()) {
+                auto* u32_offset_arg = b.InsertBitcastIfNeeded(ty.u32(), call_offset);
+                auto* offset_bytes =
+                    b.Multiply(u32_offset_arg, u32(call_ele_type->Size()))->Result();
+                call_offset = b.Divide(offset_bytes, u32(BaseEleType()->Size()))->Result();
+            }
+
+            // Total offset
+            auto* full_offset = b.Add(incoming_offset, call_offset)->Result();
+
+            // Adjust stride to be in terms of base array type.
+            uint32_t stride_index = static_cast<uint32_t>(call->Args().size() - 1);
+            auto* call_stride = call->Args()[stride_index];
+            if (call_ele_type->Size() != BaseEleType()->Size()) {
+                auto* u32_call_stride = b.InsertBitcastIfNeeded(ty.u32(), call_stride);
+                auto* stride_bytes =
+                    b.Multiply(u32_call_stride, u32(call_ele_type->Size()))->Result();
+                call_stride = b.Divide(stride_bytes, u32(BaseEleType()->Size()))->Result();
+            }
+
+            call->SetArg(0, var->Result());
+            call->SetArg(1, full_offset);
+            call->SetArg(stride_index, call_stride);
+        });
     }
 
     void Load(core::ir::Load* ld, core::ir::Var* var, OffsetData offset) {
@@ -911,13 +1110,13 @@ struct State {
         //    - scalar loads equal to number of vector elements
         // 2. Base type is u32
         //    - 1 or 2 u32 loads
-        //    - Note: vec3h is not possible here
+        //    - Note: vec3h occupies two u32 words (immediate address space)
         // 3. Base type is vec2u
         //    - 1 load of vec2u
         //    - Note: only vec4h possible here
         // 4. Base type is vec4u
         //    - 1 load of vec4u
-        //    - Note: vec3h is not possible here, but vec2h is
+        //    - Note: vec2h, vec3h, and vec4h are all possible here
         if (BaseEleType() == ty.u16()) {
             auto* vec_ty = ty.vec(ty.u16(), num_loads);
             auto* construct = b.Construct(vec_ty, loads);
@@ -929,8 +1128,14 @@ struct State {
             if (result_ty->Width() == 2) {
                 return b.Bitcast(result_ty, loads[0]);
             }
-            TINT_IR_ASSERT(ir, result_ty->Width() == 4);
+            TINT_IR_ASSERT(ir, result_ty->Width() == 3 || result_ty->Width() == 4);
             auto* construct = b.Construct(ty.vec2u(), loads);
+            // A vec3 occupies the same two words as a vec4, so bitcast as a vec4 and swizzle out
+            // the last element.
+            if (result_ty->Width() == 3) {
+                auto* bc = b.Bitcast(ty.vec4(result_ty->Type()), construct->Result());
+                return b.Swizzle(result_ty, bc->Result(), {0, 1, 2});
+            }
             return b.Bitcast(result_ty, construct->Result());
         } else if (BaseEleType() == ty.vec2u()) {
             TINT_IR_ASSERT(ir, result_ty->Width() == 4);
@@ -1532,18 +1737,14 @@ struct State {
 }  // namespace
 
 Result<SuccessType> DecomposeAccess(core::ir::Module& ir, const DecomposeAccessOptions& options) {
-    core::ir::AssertValid(ir,
-                          core::ir::Capabilities{
-                              core::ir::Capability::kAllow8BitIntegers,
-                              core::ir::Capability::kAllow16BitIntegers,
-                              core::ir::Capability::kLoosenValidationForShaderIO,
-                          },
-                          "before core.DecomposeAccess");
+    core::ir::AssertValid(ir, "before core.DecomposeAccess");
 
     auto res = State{ir, options}.Process();
     if (res != Success) {
         return Failure{res.Failure().reason.Str()};
     }
+
+    ir.properties.Remove(core::ir::Property::kAllowBufferTypes);
 
     return Success;
 }

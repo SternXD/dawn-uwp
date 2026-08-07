@@ -62,6 +62,7 @@
 #include "src/dawn/native/vulkan/VulkanError.h"
 #include "src/dawn/platform/metrics/HistogramMacros.h"
 #include "src/dawn/platform/tracing/TraceEvent.h"
+#include "src/utils/numeric.h"
 #include "tint/tint.h"
 
 #ifdef DAWN_ENABLE_SPIRV_VALIDATION
@@ -317,6 +318,22 @@ ResultOrError<ShaderModule::ModuleAndSpirv> ShaderModule::GetHandleAndSpirv(
     req.tintOptions.extensions.use_uniform_buffers =
         !GetDevice()->IsToggleEnabled(Toggle::DecomposeUniformBuffers);
 
+    // Maximal reconvergence takes precedence over subgroup uniform control flow in the SPIR-V
+    // backend so just try to turn both on.
+    if (GetDevice()->IsToggleEnabled(Toggle::UseSpirvReconvergenceMode)) {
+        req.tintOptions.extensions.use_maximal_reconvergence =
+            ToBackend(GetDevice())->GetDeviceInfo().HasExt(DeviceExt::MaximalReconvergence) &&
+            ToBackend(GetDevice())
+                    ->GetDeviceInfo()
+                    .shaderMaximalReconvergenceFeatures.shaderMaximalReconvergence == VK_TRUE;
+        req.tintOptions.extensions.use_subgroup_uniform_control_flow =
+            ToBackend(GetDevice())->GetDeviceInfo().HasExt(DeviceExt::SubgroupUniformControlFlow) &&
+            ToBackend(GetDevice())
+                    ->GetDeviceInfo()
+                    .shaderSubgroupUniformControlFlowFeatures.shaderSubgroupUniformControlFlow ==
+                VK_TRUE;
+    }
+
     req.tintOptions.workarounds.texture_sample_compare_depth_cube_array =
         GetDevice()->IsToggleEnabled(Toggle::VulkanSampleCompareDepthCubeArrayWorkaround);
     req.tintOptions.workarounds.texture_sample_compare_2d_polyfill =
@@ -339,6 +356,8 @@ ResultOrError<ShaderModule::ModuleAndSpirv> ShaderModule::GetHandleAndSpirv(
         GetDevice()->IsToggleEnabled(Toggle::CollapseSubgroupMinMax);
     req.tintOptions.workarounds.cooperative_matrix_stride_is_matrix_elements =
         GetDevice()->IsToggleEnabled(Toggle::VulkanCooperativeMatrixStrideIsMatrixElements);
+    req.tintOptions.workarounds.replace_workgroup_atomic_store_with_exchange =
+        GetDevice()->IsToggleEnabled(Toggle::VulkanReplaceWorkgroupAtomicStoreWithExchange);
 
     // Pass matrices to user functions by pointer on Qualcomm devices to workaround a known bug.
     // See crbug.com/tint/2045.
@@ -347,6 +366,10 @@ ResultOrError<ShaderModule::ModuleAndSpirv> ShaderModule::GetHandleAndSpirv(
     }
 
     // Set internal immediate offsets
+    // Size the immediate block to the pipeline's used slots so the decomposed array matches the
+    // push constant range reserved by the pipeline layout (see ToPushConstantBytes).
+    req.tintOptions.minimum_immediate_size =
+        checked_cast<uint32_t>(in.immediateMask.count() * kImmediateElementByteSize);
     if (HasImmediates(&RenderImmediates::clampFragDepth, in.immediateMask)) {
         uint32_t offsetStartBytes =
             GetImmediateByteOffsetInPipeline(&RenderImmediates::clampFragDepth, in.immediateMask);
@@ -454,7 +477,7 @@ ResultOrError<ShaderModule::ModuleAndSpirv> ShaderModule::GetHandleAndSpirv(
 
 #ifdef DAWN_ENABLE_SPIRV_VALIDATION
     if (GetDevice()->IsToggleEnabled(Toggle::DumpShaders)) {
-        DumpSpirv(GetDevice(), compilation->spirv.data(), compilation->spirv.size());
+        DumpSpirv(GetDevice(), compilation->spirv);
     }
 
     if (GetDevice()->IsToggleEnabled(Toggle::EnableSpirvValidation)) {
@@ -462,8 +485,7 @@ ResultOrError<ShaderModule::ModuleAndSpirv> ShaderModule::GetHandleAndSpirv(
 
         // Validate and if required dump the compiled SPIR-V code.
         const bool spv14 = GetDevice()->IsToggleEnabled(Toggle::UseSpirv14);
-        DAWN_TRY(ValidateSpirv(GetDevice(), compilation->spirv.data(), compilation->spirv.size(),
-                               spv14));
+        DAWN_TRY(ValidateSpirv(GetDevice(), compilation->spirv, spv14));
     }
 #endif
 

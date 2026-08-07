@@ -25,9 +25,10 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#include <gtest/gtest.h>
+#include <ranges>
 
 #include "src/dawn/common/ityp_array.h"
+#include "src/utils/gtest.h"
 #include "src/utils/typed_integer.h"
 
 namespace dawn {
@@ -48,6 +49,9 @@ class ITypArrayTest : public testing::Test {
         static_assert(kArr.at(Key(7u)) == Val(7u));
         static_assert(kArr.size() == Key(10u));
     };
+
+    // Check that ityp::array can be used as a range.
+    static_assert(std::ranges::contiguous_range<Array>);
 };
 
 // Test that values can be set at an index and retrieved from the same index.
@@ -118,12 +122,12 @@ TEST_F(ITypArrayDeathTest, OutOfBounds) {
     }
 
     Array arr;
-    EXPECT_DEATH(arr[Key(10u)], "");
-    EXPECT_DEATH(arr.at(Key(10u)), "");
+    EXPECT_DEATH_IF_SUPPORTED(arr[Key(10u)], "");
+    EXPECT_DEATH_IF_SUPPORTED(arr.at(Key(10u)), "");
 
     const Array& constArr = arr;
-    EXPECT_DEATH(constArr[Key(10u)], "");
-    EXPECT_DEATH(constArr.at(Key(10u)), "");
+    EXPECT_DEATH_IF_SUPPORTED(constArr[Key(10u)], "");
+    EXPECT_DEATH_IF_SUPPORTED(constArr.at(Key(10u)), "");
 }
 
 // If the index/size is 64-bit, it needs to be narrowed to size_t. Verify that's checked correctly.
@@ -140,11 +144,11 @@ TEST_F(ITypArrayDeathTest, OversizedIndex) {
 
     vec[Key64(9u)];
     // Regular out-of-bounds.
-    EXPECT_DEATH(vec[Key64(10u)], "");
+    EXPECT_DEATH_IF_SUPPORTED(vec[Key64(10u)], "");
 
     vec[Key64(0u)];
     // If this were cast to a 32-bit size_t without a check, it would be in-bounds.
-    EXPECT_DEATH(vec[kHugeKey64], "");
+    EXPECT_DEATH_IF_SUPPORTED(vec[kHugeKey64], "");
 }
 
 }  // anonymous namespace

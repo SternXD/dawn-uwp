@@ -53,6 +53,7 @@
 #include "src/dawn/native/vulkan/VulkanError.h"
 #include "src/utils/assert.h"
 #include "src/utils/compiler.h"
+#include "src/utils/numeric.h"
 
 namespace dawn::native::vulkan {
 
@@ -916,8 +917,8 @@ void Texture::NotifySwapChainPresent() {
 
         // We signal the end of the current frame and the start of the next.
         // This means we miss capturing the very first frame.
-        renderDocApi->EndFrameCapture(renderDocDevicePtr, NULL);
-        renderDocApi->StartFrameCapture(renderDocDevicePtr, NULL);
+        renderDocApi->EndFrameCapture(renderDocDevicePtr, nullptr);
+        renderDocApi->StartFrameCapture(renderDocDevicePtr, nullptr);
     }
 #endif
 }
@@ -1095,7 +1096,8 @@ void Texture::TransitionUsageNow(CommandRecordingContext* recordingContext,
         DAWN_ASSERT(srcStages != 0 && dstStages != 0);
         ToBackend(GetDevice())
             ->fn.CmdPipelineBarrier(recordingContext->commandBuffer, srcStages, dstStages, 0, 0,
-                                    nullptr, 0, nullptr, barriers.size(), barriers.data());
+                                    nullptr, 0, nullptr, checked_cast<uint32_t>(barriers.size()),
+                                    barriers.data());
     }
 }
 
@@ -1184,6 +1186,7 @@ MaybeError Texture::ClearTexture(CommandRecordingContext* recordingContext,
     const bool isZero = clearValue == TextureBase::ClearValue::Zero;
     uint32_t uClearColor = isZero ? 0 : 1;
     float fClearColor = isZero ? 0.f : 1.f;
+    double dClearColor = double{fClearColor};
 
     VkImageSubresourceRange imageRange = {};
     imageRange.levelCount = 1;
@@ -1254,15 +1257,14 @@ MaybeError Texture::ClearTexture(CommandRecordingContext* recordingContext,
                 colorAttachment.view = beginCmd.colorAttachments[ca0].view.Get();
 
                 beginCmd.colorAttachments[ca0].clearColor = colorAttachment.clearValue = {
-                    fClearColor, fClearColor, fClearColor, fClearColor};
+                    dClearColor, dClearColor, dClearColor, dClearColor};
                 beginCmd.colorAttachments[ca0].loadOp = colorAttachment.loadOp =
                     wgpu::LoadOp::Clear;
                 beginCmd.colorAttachments[ca0].storeOp = colorAttachment.storeOp =
                     wgpu::StoreOp::Store;
 
                 RenderPassDescriptor passDesc{};
-                passDesc.colorAttachmentCount = 1u;
-                passDesc.colorAttachments = &colorAttachment;
+                passDesc.colorAttachments = SpanFromRef<ColorAttachmentIndex>(colorAttachment);
 
                 for (uint32_t depthSlice = 0; depthSlice < depthSliceCount; ++depthSlice) {
                     beginCmd.colorAttachments[ca0].depthSlice = colorAttachment.depthSlice =
@@ -1336,9 +1338,11 @@ MaybeError Texture::ClearTexture(CommandRecordingContext* recordingContext,
             blocksPerRow * largestMipSize.height * largestMipSize.depthOrArrayLayers;
         uint64_t uploadSize = blockInfo.ToBytes(uploadBlocks);
 
+        // TODO(https://crbug.com/534203108): Spanify WithUploadReservation.
         DAWN_UNSAFE_TODO(DAWN_TRY(device->GetDynamicUploader()->WithUploadReservation(
             uploadSize, blockInfo.byteSize, [&](UploadReservation reservation) -> MaybeError {
-                memset(reservation.mappedPointer, uClearColor, uploadSize);
+                memset(reservation.mappedPointer, sign_dcast(uClearColor),
+                       checked_cast<size_t>(uploadSize));
 
                 std::vector<VkBufferImageCopy> regions;
                 for (uint32_t level = range.baseMipLevel;
@@ -1371,10 +1375,10 @@ MaybeError Texture::ClearTexture(CommandRecordingContext* recordingContext,
                     }
                 }
 
-                device->fn.CmdCopyBufferToImage(recordingContext->commandBuffer,
-                                                ToBackend(reservation.buffer)->GetHandle(),
-                                                GetHandle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                                regions.size(), regions.data());
+                device->fn.CmdCopyBufferToImage(
+                    recordingContext->commandBuffer, ToBackend(reservation.buffer)->GetHandle(),
+                    GetHandle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    checked_cast<uint32_t>(regions.size()), regions.data());
                 return {};
             })));
     }
@@ -1386,32 +1390,7 @@ MaybeError Texture::ClearTexture(CommandRecordingContext* recordingContext,
     return {};
 }
 
-MaybeError Texture::PinImpl(wgpu::TextureUsage usage) {
-    // Pinning means that until unpinned, the texture will have specific usage and can be used
-    // freely in shaders without any further check or memory barrier tracking. Ensure all
-    // subresources are cleared and transitioned to the usage.
-    DAWN_ASSERT(!HasPinnedUsage());
-    SubresourceRange pinnedSubresources = GetAllSubresources();
 
-    CommandRecordingContext* recordingContext =
-        ToBackend(GetDevice()->GetQueue())->GetPendingRecordingContext(Queue::SubmitMode::Passive);
-    DAWN_TRY(EnsureSubresourceContentInitialized(recordingContext, pinnedSubresources));
-
-    TransitionUsageNow(recordingContext, usage, kAllStages, pinnedSubresources);
-
-    // TODO(https://issues.chromium.org/473444516): Investigate what to do for imported textures.
-    // Should we consider a pin/unpin pair similar to an access on a queue such that we need to
-    // wait on fences or export them?
-    return {};
-}
-
-void Texture::UnpinImpl() {
-    DAWN_ASSERT(HasPinnedUsage());
-
-    // TODO(https://issues.chromium.org/473444516): Investigate what to do for imported textures.
-    // Should we consider a pin/unpin pair similar to an access on a queue such that we need to
-    // wait on fences or export them?
-}
 
 MaybeError Texture::EnsureSubresourceContentInitialized(CommandRecordingContext* recordingContext,
                                                         const SubresourceRange& range) {
@@ -1527,7 +1506,7 @@ MaybeError InternalTexture::Initialize(VkImageUsageFlags extraUsages) {
             viewFormats.push_back(VulkanImageFormat(device, viewFormat.format));
         }
 
-        imageFormatListInfo.viewFormatCount = viewFormats.size();
+        imageFormatListInfo.viewFormatCount = checked_cast<uint32_t>(viewFormats.size());
         imageFormatListInfo.pViewFormats = viewFormats.data();
     }
 
@@ -1999,7 +1978,7 @@ MaybeError ExternalVkImageTexture::Initialize(const ExternalImageDescriptorVk* d
                 viewFormats.push_back(VulkanImageFormat(device, viewFormat.format));
             }
 
-            imageFormatListInfo.viewFormatCount = viewFormats.size();
+            imageFormatListInfo.viewFormatCount = checked_cast<uint32_t>(viewFormats.size());
             imageFormatListInfo.pViewFormats = viewFormats.data();
         }
     }

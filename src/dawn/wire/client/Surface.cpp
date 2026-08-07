@@ -40,18 +40,14 @@
 
 namespace dawn::wire::client {
 
-Surface::Surface(const ObjectBaseParams& params, const WGPUSurfaceCapabilities* capabilities)
+Surface::Surface(const ObjectBaseParams& params, const SurfaceCapabilities* capabilities)
     : ObjectBase(params) {
     // Copy over the capabilities.
     mSupportedUsages = capabilities->usages;
-    mSupportedFormats.assign(capabilities->formats,
-                             DAWN_UNSAFE_TODO(capabilities->formats + capabilities->formatCount));
-    mSupportedPresentModes.assign(
-        capabilities->presentModes,
-        DAWN_UNSAFE_TODO(capabilities->presentModes + capabilities->presentModeCount));
-    mSupportedAlphaModes.assign(
-        capabilities->alphaModes,
-        DAWN_UNSAFE_TODO(capabilities->alphaModes + capabilities->alphaModeCount));
+    mSupportedFormats.assign(capabilities->formats.begin(), capabilities->formats.end());
+    mSupportedPresentModes.assign(capabilities->presentModes.begin(),
+                                  capabilities->presentModes.end());
+    mSupportedAlphaModes.assign(capabilities->alphaModes.begin(), capabilities->alphaModes.end());
 
     DAWN_ASSERT(!mSupportedFormats.empty() && !mSupportedPresentModes.empty() &&
                 !mSupportedAlphaModes.empty());
@@ -63,27 +59,27 @@ ObjectType Surface::GetObjectType() const {
     return ObjectType::Surface;
 }
 
-void Surface::APIConfigure(const WGPUSurfaceConfiguration* config) {
-    mConfiguredDevice = FromAPI(config->device);
+void Surface::APIConfigure(const SurfaceConfiguration* config) {
+    mConfiguredDevice = config->device;
 
     mTextureDescriptor = {};
     mTextureDescriptor.size = {config->width, config->height, 1};
     mTextureDescriptor.format = config->format;
     mTextureDescriptor.usage = config->usage;
-    mTextureDescriptor.dimension = WGPUTextureDimension_2D;
+    mTextureDescriptor.dimension = wgpu::TextureDimension::e2D;
     mTextureDescriptor.mipLevelCount = 1;
     mTextureDescriptor.sampleCount = 1;
 
     SurfaceConfigureCmd cmd;
     cmd.self = ToAPI(this);
-    cmd.config = config;
+    cmd.config = ToAPI(config);
     GetClient()->SerializeCommand(cmd);
 }
 
-WGPUStatus Surface::APIPresent() {
+wgpu::Status Surface::APIPresent() {
     if (mConfiguredDevice == nullptr) {
         dawn::ErrorLog() << "Surface::Present on an unconfigured Surface.";
-        return WGPUStatus_Error;
+        return wgpu::Status::Error;
     }
 
     SurfacePresentCmd cmd;
@@ -92,7 +88,7 @@ WGPUStatus Surface::APIPresent() {
 
     // The only synchronous error is if the surface isn't configured.
     // Otherwise, we let the server report errors via the device.
-    return WGPUStatus_Success;
+    return wgpu::Status::Success;
 }
 
 void Surface::APIUnconfigure() {
@@ -103,49 +99,32 @@ void Surface::APIUnconfigure() {
     GetClient()->SerializeCommand(cmd);
 }
 
-WGPUTextureFormat Surface::APIGetPreferredFormat([[maybe_unused]] WGPUAdapter adapter) const {
+wgpu::TextureFormat Surface::APIGetPreferredFormat([[maybe_unused]] Adapter* adapter) const {
     dawn::ErrorLog() << "Surface::GetPreferredFormat is deprecated, use "
                         "Surface::GetCapabilities().formats[0] instead.";
     return mSupportedFormats[0];
 }
 
-WGPUStatus Surface::APIGetCapabilities(WGPUAdapter adapter,
-                                       WGPUSurfaceCapabilities* capabilities) const {
+wgpu::Status Surface::APIGetCapabilities(Adapter* adapter,
+                                         SurfaceCapabilities* capabilities) const {
     // Return the capabilities that were provided when injecting the surface.
     capabilities->nextInChain = nullptr;
     capabilities->usages = mSupportedUsages;
 
-    capabilities->presentModeCount = mSupportedPresentModes.size();
-    WGPUPresentMode* presentModes = new WGPUPresentMode[capabilities->presentModeCount];
-    std::copy(mSupportedPresentModes.begin(), mSupportedPresentModes.end(), presentModes);
-    capabilities->presentModes = presentModes;
+    // These will be freed by APIFreeMembers.
+    capabilities->presentModes = HeapArrayFrom(mSupportedPresentModes).MoveToSpan();
+    capabilities->formats = HeapArrayFrom(mSupportedFormats).MoveToSpan();
+    capabilities->alphaModes = HeapArrayFrom(mSupportedAlphaModes).MoveToSpan();
 
-    capabilities->formatCount = mSupportedFormats.size();
-    WGPUTextureFormat* formats = new WGPUTextureFormat[capabilities->formatCount];
-    std::copy(mSupportedFormats.begin(), mSupportedFormats.end(), formats);
-    capabilities->formats = formats;
-
-    capabilities->alphaModeCount = mSupportedAlphaModes.size();
-    WGPUCompositeAlphaMode* alphaModes = new WGPUCompositeAlphaMode[capabilities->alphaModeCount];
-    std::copy(mSupportedAlphaModes.begin(), mSupportedAlphaModes.end(), alphaModes);
-    capabilities->alphaModes = alphaModes;
-
-    return WGPUStatus_Success;
+    return wgpu::Status::Success;
 }
 
-void Surface::APIGetCurrentTexture(WGPUSurfaceTexture* surfaceTexture) {
+void Surface::APIGetCurrentTexture(SurfaceTexture* surfaceTexture) {
     // Handle error cases that return no textures first.
     surfaceTexture->texture = nullptr;
 
-    surfaceTexture->status = WGPUSurfaceGetCurrentTextureStatus_Error;
+    surfaceTexture->status = wgpu::SurfaceGetCurrentTextureStatus::Error;
     if (mConfiguredDevice == nullptr) {
-        return;
-    }
-
-    if (!mConfiguredDevice->IsAlive()) {
-        surfaceTexture->status = WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal;
-        surfaceTexture->texture =
-            Texture::CreateError(mConfiguredDevice.Get(), &mTextureDescriptor);
         return;
     }
 
@@ -159,8 +138,8 @@ void Surface::APIGetCurrentTexture(WGPUSurfaceTexture* surfaceTexture) {
     cmd.configuredDeviceId = mConfiguredDevice->GetWireHandle(wireClient).id;
     wireClient->SerializeCommand(cmd);
 
-    surfaceTexture->status = WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal;
-    surfaceTexture->texture = ReturnToAPI(std::move(texture));
+    surfaceTexture->status = wgpu::SurfaceGetCurrentTextureStatus::SuccessOptimal;
+    surfaceTexture->texture = ReturnToAPI2(std::move(texture));
 }
 
 void APIFreeMembers(WGPUSurfaceCapabilities capabilities) {

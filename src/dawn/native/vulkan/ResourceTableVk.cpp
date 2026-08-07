@@ -39,6 +39,7 @@
 #include "src/dawn/native/vulkan/UtilsVulkan.h"
 #include "src/dawn/native/vulkan/VulkanError.h"
 #include "src/utils/compiler.h"
+#include "src/utils/numeric.h"
 namespace dawn::native::vulkan {
 
 // static
@@ -188,9 +189,15 @@ MaybeError ResourceTable::Initialize() {
     return {};
 }
 
-// Apply updates to resources or to the metadata buffers that are pending.
-MaybeError ResourceTable::ApplyPendingUpdates(CommandRecordingContext* recordingContext) {
-    Updates updates = AcquireDirtySlotUpdates();
+MaybeError ResourceTable::ApplyPendingUpdates(
+    CommandRecordingContext* recordingContext,
+    const absl::flat_hash_set<TextureBase*>& writableTextures) {
+    Updates updates = AcquireDirtySlotUpdates(writableTextures);
+
+    // Transition and initialize all required textures
+    if (!updates.texturesToTransition.empty()) {
+        DAWN_TRY(TransitionResources(recordingContext, updates.texturesToTransition));
+    }
 
     if (!updates.metadataUpdates.empty()) {
         DAWN_TRY(UpdateMetadataBuffer(recordingContext, updates.metadataUpdates));
@@ -199,6 +206,19 @@ MaybeError ResourceTable::ApplyPendingUpdates(CommandRecordingContext* recording
         DAWN_TRY(UpdateResourceBindings(updates.resourceDiffs));
     }
 
+    return {};
+}
+
+MaybeError ResourceTable::TransitionResources(
+    CommandRecordingContext* recordingContext,
+    const absl::flat_hash_set<Ref<TextureBase>>& textures) {
+    for (const auto& texture : textures) {
+        Texture* textureBackend = ToBackend(texture.Get());
+        DAWN_TRY(textureBackend->EnsureSubresourceContentInitialized(
+            recordingContext, textureBackend->GetAllSubresources()));
+        textureBackend->TransitionUsageNow(recordingContext, wgpu::TextureUsage::TextureBinding,
+                                           kAllStages, textureBackend->GetAllSubresources());
+    }
     return {};
 }
 
@@ -212,6 +232,7 @@ MaybeError ResourceTable::UpdateMetadataBuffer(CommandRecordingContext* recordin
     Device* device = ToBackend(GetDevice());
 
     // Allocate enough space for all the data to modify and schedule the copies.
+    // TODO(https://crbug.com/534203108): Spanify WithUploadReservation.
     return device->GetDynamicUploader()->WithUploadReservation(
         sizeof(uint32_t) * updates.size(), kCopyBufferToBufferOffsetAlignment,
         [&](UploadReservation reservation) -> MaybeError {
@@ -237,9 +258,9 @@ MaybeError ResourceTable::UpdateMetadataBuffer(CommandRecordingContext* recordin
             }
 
             // Enqueue the copy commands all at once.
-            device->fn.CmdCopyBuffer(recordingContext->commandBuffer,
-                                     ToBackend(reservation.buffer)->GetHandle(),
-                                     metadataBuffer->GetHandle(), copies.size(), copies.data());
+            device->fn.CmdCopyBuffer(
+                recordingContext->commandBuffer, ToBackend(reservation.buffer)->GetHandle(),
+                metadataBuffer->GetHandle(), checked_cast<uint32_t>(copies.size()), copies.data());
 
             // Transition the buffer back to be used as storage as that's how it will be used for
             // shader-side validation.
@@ -320,8 +341,8 @@ MaybeError ResourceTable::UpdateResourceBindings(const std::vector<ResourceDiff>
         writes.push_back(write);
     }
 
-    device->fn.UpdateDescriptorSets(device->GetVkDevice(), writes.size(), writes.data(), 0,
-                                    nullptr);
+    device->fn.UpdateDescriptorSets(device->GetVkDevice(), checked_cast<uint32_t>(writes.size()),
+                                    writes.data(), 0, nullptr);
     return {};
 }
 

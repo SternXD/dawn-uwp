@@ -563,7 +563,6 @@ TEST_P(D3D12DescriptorHeapTests, SwitchOverSamplerHeap) {
                 _ = sampler0;
                 return vec4f(0.0, 0.0, 0.0, 0.0);
             })");
-    wgpu::RenderPipeline pipeline1Sampler = device.CreateRenderPipeline(&renderPipelineDescriptor);
 
     wgpu::Sampler sampler = device.CreateSampler();
 
@@ -1618,6 +1617,9 @@ class D3D12ResourceTableDescriptorHeapTests : public D3D12DescriptorHeapTests {
 
     void SetUp() override {
         D3D12DescriptorHeapTests::SetUp();
+        if (IsSkipped() || HasFatalFailure()) {
+            return;
+        }
         DAWN_TEST_UNSUPPORTED_IF(
             !SupportsFeatures({wgpu::FeatureName::ChromiumExperimentalSamplingResourceTable}));
 

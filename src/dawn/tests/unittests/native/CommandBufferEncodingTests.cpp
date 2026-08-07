@@ -28,6 +28,7 @@
 #include <utility>
 #include <vector>
 
+#include "src/dawn/common/Enumerator.h"
 #include "src/dawn/native/CommandBuffer.h"
 #include "src/dawn/native/Commands.h"
 #include "src/dawn/native/ComputePassEncoder.h"
@@ -103,8 +104,8 @@ TEST_F(CommandBufferEncodingTests, ComputePassEncoderIndirectDispatchStateRestor
         utils::MakeBindGroup(device, dynamicLayout, {{0, uniformBuffer, 0, 256}});
 
     uint32_t dynamicOffset = 256;
-    std::vector<uint32_t> emptyDynamicOffsets = {};
-    std::vector<uint32_t> singleDynamicOffset = {dynamicOffset};
+    ityp::vector<BindGroupIndex, uint32_t> emptyDynamicOffsets = {};
+    ityp::vector<BindGroupIndex, uint32_t> singleDynamicOffset = {dynamicOffset};
 
     // Begin encoding commands.
     wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
@@ -124,10 +125,10 @@ TEST_F(CommandBufferEncodingTests, ComputePassEncoderIndirectDispatchStateRestor
     // Expect restored state.
     EXPECT_EQ(ToAPI(stateTracker->GetComputePipeline()), pipeline0.Get());
     EXPECT_EQ(ToAPI(stateTracker->GetPipelineLayout()), pl0.Get());
-    EXPECT_EQ(ToAPI(stateTracker->GetBindGroup(BindGroupIndex(0u))), staticBG.Get());
-    EXPECT_EQ(stateTracker->GetDynamicOffsets(BindGroupIndex(0u)), emptyDynamicOffsets);
-    EXPECT_EQ(ToAPI(stateTracker->GetBindGroup(BindGroupIndex(1u))), dynamicBG.Get());
-    EXPECT_EQ(stateTracker->GetDynamicOffsets(BindGroupIndex(1u)), singleDynamicOffset);
+    EXPECT_TRUE(std::ranges::equal(stateTracker->GetDynamicOffsets(BindGroupIndex(0u)),
+                                   emptyDynamicOffsets));
+    EXPECT_TRUE(std::ranges::equal(stateTracker->GetDynamicOffsets(BindGroupIndex(1u)),
+                                   singleDynamicOffset));
 
     // Dispatch again to check that the restored state can be used.
     // Also pass an indirect offset which should get replaced with the offset
@@ -137,10 +138,10 @@ TEST_F(CommandBufferEncodingTests, ComputePassEncoderIndirectDispatchStateRestor
     // Expect restored state.
     EXPECT_EQ(ToAPI(stateTracker->GetComputePipeline()), pipeline0.Get());
     EXPECT_EQ(ToAPI(stateTracker->GetPipelineLayout()), pl0.Get());
-    EXPECT_EQ(ToAPI(stateTracker->GetBindGroup(BindGroupIndex(0u))), staticBG.Get());
-    EXPECT_EQ(stateTracker->GetDynamicOffsets(BindGroupIndex(0u)), emptyDynamicOffsets);
-    EXPECT_EQ(ToAPI(stateTracker->GetBindGroup(BindGroupIndex(1u))), dynamicBG.Get());
-    EXPECT_EQ(stateTracker->GetDynamicOffsets(BindGroupIndex(1u)), singleDynamicOffset);
+    EXPECT_TRUE(std::ranges::equal(stateTracker->GetDynamicOffsets(BindGroupIndex(0u)),
+                                   emptyDynamicOffsets));
+    EXPECT_TRUE(std::ranges::equal(stateTracker->GetDynamicOffsets(BindGroupIndex(1u)),
+                                   singleDynamicOffset));
 
     // Change the pipeline
     pass.SetPipeline(pipeline1);
@@ -154,10 +155,10 @@ TEST_F(CommandBufferEncodingTests, ComputePassEncoderIndirectDispatchStateRestor
     // Expect restored state.
     EXPECT_EQ(ToAPI(stateTracker->GetComputePipeline()), pipeline1.Get());
     EXPECT_EQ(ToAPI(stateTracker->GetPipelineLayout()), pl1.Get());
-    EXPECT_EQ(ToAPI(stateTracker->GetBindGroup(BindGroupIndex(0u))), dynamicBG.Get());
-    EXPECT_EQ(stateTracker->GetDynamicOffsets(BindGroupIndex(0u)), singleDynamicOffset);
-    EXPECT_EQ(ToAPI(stateTracker->GetBindGroup(BindGroupIndex(1u))), staticBG.Get());
-    EXPECT_EQ(stateTracker->GetDynamicOffsets(BindGroupIndex(1u)), emptyDynamicOffsets);
+    EXPECT_TRUE(std::ranges::equal(stateTracker->GetDynamicOffsets(BindGroupIndex(0u)),
+                                   singleDynamicOffset));
+    EXPECT_TRUE(std::ranges::equal(stateTracker->GetDynamicOffsets(BindGroupIndex(1u)),
+                                   emptyDynamicOffsets));
 
     pass.End();
 
@@ -174,16 +175,16 @@ TEST_F(CommandBufferEncodingTests, ComputePassEncoderIndirectDispatchStateRestor
                                  std::vector<uint32_t> offsets = {}) {
         return [index, bg, offsets](CommandIterator* commands) {
             auto* cmd = commands->NextCommand<SetBindGroupCmd>();
-            uint32_t* dynamicOffsets = nullptr;
-            if (cmd->dynamicOffsetCount > 0) {
-                dynamicOffsets = commands->NextData<uint32_t>(cmd->dynamicOffsetCount);
+            ityp::span<BindingIndex, const uint32_t> cmdOffsets;
+            if (cmd->dynamicOffsetCount > BindingIndex{0u}) {
+                cmdOffsets = commands->NextData<uint32_t>(cmd->dynamicOffsetCount);
             }
 
             ASSERT_EQ(cmd->index, BindGroupIndex(index));
             ASSERT_EQ(ToAPI(cmd->group.Get()), bg.Get());
-            ASSERT_EQ(cmd->dynamicOffsetCount, offsets.size());
-            for (uint32_t i = 0; i < cmd->dynamicOffsetCount; ++i) {
-                DAWN_UNSAFE_TODO(ASSERT_EQ(dynamicOffsets[i], offsets[i]));
+            ASSERT_EQ(uint32_t{cmdOffsets.size()}, offsets.size());
+            for (auto [i, cmdOffset] : Enumerate(cmdOffsets)) {
+                ASSERT_EQ(cmdOffset, offsets[uint32_t{i}]);
             }
         };
     };
@@ -218,7 +219,7 @@ TEST_F(CommandBufferEncodingTests, ComputePassEncoderIndirectDispatchStateRestor
         auto* cmd = commands->NextCommand<SetBindGroupCmd>();
         ASSERT_EQ(cmd->index, BindGroupIndex(0u));
         ASSERT_NE(cmd->group.Get(), nullptr);
-        ASSERT_EQ(cmd->dynamicOffsetCount, 0u);
+        ASSERT_EQ(cmd->dynamicOffsetCount, BindingIndex{0u});
     };
 
     auto ExpectSetValidationDispatch = [&](CommandIterator* commands) {

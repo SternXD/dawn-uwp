@@ -291,7 +291,8 @@ TEST_P(SharedTextureMemoryTests, GPUWriteThenCPURead) {
     auto* pixels = static_cast<utils::RGBA8*>(ptr);
     for (uint32_t r = 0; r < aHardwareBufferDesc.height; ++r) {
         for (uint32_t c = 0; c < aHardwareBufferDesc.width; ++c) {
-            EXPECT_EQ(pixels[r * aHardwareBufferDesc.stride + c], utils::RGBA8(128, 255, 64, 255))
+            EXPECT_EQ(DAWN_UNSAFE_TODO(pixels[r * aHardwareBufferDesc.stride + c]),
+                      utils::RGBA8(128, 255, 64, 255))
                 << r << ", " << c;
         }
     }
@@ -355,7 +356,7 @@ TEST_P(SharedTextureMemoryTests, CPUWriteThenGPURead) {
     auto* pixels = static_cast<utils::RGBA8*>(ptr);
     for (uint32_t r = 0; r < aHardwareBufferDesc.height; ++r) {
         for (uint32_t c = 0; c < aHardwareBufferDesc.width; ++c) {
-            pixels[r * aHardwareBufferDesc.stride + c] =
+            DAWN_UNSAFE_TODO(pixels[r * aHardwareBufferDesc.stride + c]) =
                 expected[r * aHardwareBufferDesc.width + c];
         }
     }
@@ -459,13 +460,39 @@ TEST_P(SharedTextureMemoryTests, MSRTSSWriteThenCPURead) {
     auto* pixels = static_cast<utils::RGBA8*>(ptr);
     for (uint32_t r = 0; r < aHardwareBufferDesc.height; ++r) {
         for (uint32_t c = 0; c < aHardwareBufferDesc.width; ++c) {
-            EXPECT_EQ(pixels[r * aHardwareBufferDesc.stride + c], utils::RGBA8(128, 255, 64, 255))
+            EXPECT_EQ(DAWN_UNSAFE_TODO(pixels[r * aHardwareBufferDesc.stride + c]),
+                      utils::RGBA8(128, 255, 64, 255))
                 << r << ", " << c;
         }
     }
 
     EXPECT_EQ(AHardwareBuffer_unlock(aHardwareBuffer, nullptr), 0);
     AHardwareBuffer_release(aHardwareBuffer);
+}
+
+// Ensure that importing protected AHBs is unsupported.
+TEST_P(SharedTextureMemoryTests, ProtectedUnsupported) {
+    AHardwareBuffer_Desc aHardwareBufferDesc = {
+        .width = 4,
+        .height = 4,
+        .layers = 1,
+        .format = AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM,
+        .usage = AHARDWAREBUFFER_USAGE_GPU_FRAMEBUFFER | AHARDWAREBUFFER_USAGE_PROTECTED_CONTENT,
+    };
+    AHardwareBuffer* aHardwareBuffer;
+    EXPECT_EQ(AHardwareBuffer_allocate(&aHardwareBufferDesc, &aHardwareBuffer), 0);
+
+    // Get actual desc for allocated buffer so we know the stride for cpu data.
+    AHardwareBuffer_describe(aHardwareBuffer, &aHardwareBufferDesc);
+
+    wgpu::SharedTextureMemoryAHardwareBufferDescriptor stmAHardwareBufferDesc;
+    stmAHardwareBufferDesc.handle = aHardwareBuffer;
+
+    wgpu::SharedTextureMemoryDescriptor desc;
+    desc.nextInChain = &stmAHardwareBufferDesc;
+
+    ASSERT_DEVICE_ERROR_MSG(device.ImportSharedTextureMemory(&desc),
+                            testing::HasSubstr("Unsupported AHardwareBuffer usage"));
 }
 
 DAWN_INSTANTIATE_PREFIXED_TEST_P(Vulkan,

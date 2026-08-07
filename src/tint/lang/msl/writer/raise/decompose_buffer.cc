@@ -231,6 +231,9 @@ Result<SuccessType> DecomposeBuffer(core::ir::Module& ir) {
 
     State{ir}.Process();
 
+    ir.properties.Add(core::ir::Property::kAllow8BitIntegers);
+    ir.properties.Remove(core::ir::Property::kAllowBufferTypes);
+
     return Success;
 }
 

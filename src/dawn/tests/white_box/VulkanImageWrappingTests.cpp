@@ -308,10 +308,8 @@ class VulkanImageWrappingUsageTests : public VulkanImageWrappingTestBase {
         // Create another device based on the original
         adapterBase = native::FromAPI(device.Get())->GetAdapter();
         deviceDescriptor.nextInChain = &deviceTogglesDesc;
-        deviceTogglesDesc.enabledToggles = GetParam().forceEnabledWorkarounds.data();
-        deviceTogglesDesc.enabledToggleCount = GetParam().forceEnabledWorkarounds.size();
-        deviceTogglesDesc.disabledToggles = GetParam().forceDisabledWorkarounds.data();
-        deviceTogglesDesc.disabledToggleCount = GetParam().forceDisabledWorkarounds.size();
+        deviceTogglesDesc.enabledToggles = GetParam().forceEnabledWorkarounds;
+        deviceTogglesDesc.disabledToggles = GetParam().forceDisabledWorkarounds;
 
         secondDeviceVk = native::vulkan::ToBackend(adapterBase->APICreateDevice(&deviceDescriptor));
         secondDevice = wgpu::Device::Acquire(native::ToAPI(secondDeviceVk));
@@ -856,10 +854,13 @@ TEST_P(VulkanImageWrappingUsageTests, LargerImage) {
             float normCol = static_cast<float>(col) / width;
             float dist = sqrt(normRow * normRow + normCol * normCol) * 3;
             dist = dist - static_cast<int>(dist);
-            data[4 * (row * width + col)] = static_cast<unsigned char>(dist * 255);
-            data[4 * (row * width + col) + 1] = static_cast<unsigned char>(dist * 255);
-            data[4 * (row * width + col) + 2] = static_cast<unsigned char>(dist * 255);
-            data[4 * (row * width + col) + 3] = 255;
+            data[static_cast<size_t>(4) * (row * width + col)] =
+                static_cast<unsigned char>(dist * 255);
+            data[static_cast<size_t>(4) * (row * width + col) + 1] =
+                static_cast<unsigned char>(dist * 255);
+            data[static_cast<size_t>(4) * (row * width + col) + 2] =
+                static_cast<unsigned char>(dist * 255);
+            data[static_cast<size_t>(4) * (row * width + col) + 3] = 255;
         }
     }
 

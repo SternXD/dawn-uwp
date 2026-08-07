@@ -38,8 +38,8 @@ import("../../../../../scripts/dawn_overrides_with_defaults.gni")
 import("../../../../../scripts/tint_overrides_with_defaults.gni")
 
 import("${tint_src_dir}/tint.gni")
-if (tint_build_fuzzer_vulkan_support && tint_build_ir_binary &&
-    tint_build_wgsl_reader && tint_build_mesa) {
+if (tint_build_fuzzer_vulkan_support && tint_build_fuzzers &&
+    tint_build_ir_binary && tint_build_mesa && tint_build_wgsl_reader) {
   tint_fuzzer_test("ir_mesa") {
     output_name = "tint_ir_mesa_fuzzer"
     sources = [ "main_fuzz.cc" ]
@@ -58,8 +58,6 @@ if (tint_build_fuzzer_vulkan_support && tint_build_ir_binary &&
       "${tint_src_dir}/lang/core/ir/binary:fuzz",
       "${tint_src_dir}/lang/core/ir/transform:fuzz",
       "${tint_src_dir}/lang/core/type",
-      "${tint_src_dir}/lang/hlsl/writer/raise:fuzz",
-      "${tint_src_dir}/lang/wgsl/writer/raise:fuzz",
       "${tint_src_dir}/utils",
       "${tint_src_dir}/utils/bytes",
       "${tint_src_dir}/utils/containers",
@@ -80,7 +78,10 @@ if (tint_build_fuzzer_vulkan_support && tint_build_ir_binary &&
     }
 
     if (tint_build_hlsl_writer) {
-      deps += [ "${tint_src_dir}/lang/hlsl/writer:fuzz" ]
+      deps += [
+        "${tint_src_dir}/lang/hlsl/writer:fuzz",
+        "${tint_src_dir}/lang/hlsl/writer/raise:fuzz",
+      ]
     }
 
     if (tint_build_msl_writer) {
@@ -92,7 +93,10 @@ if (tint_build_fuzzer_vulkan_support && tint_build_ir_binary &&
     }
 
     if (tint_build_wgsl_writer) {
-      deps += [ "${tint_src_dir}/lang/wgsl/writer:fuzz" ]
+      deps += [
+        "${tint_src_dir}/lang/wgsl/writer:fuzz",
+        "${tint_src_dir}/lang/wgsl/writer/raise:fuzz",
+      ]
     }
   }
 }

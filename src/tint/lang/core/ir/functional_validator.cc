@@ -48,12 +48,15 @@
 #include "src/tint/lang/core/type/memory_view.h"
 #include "src/tint/lang/core/type/pointer.h"
 #include "src/tint/lang/core/type/reference.h"
+#include "src/tint/lang/core/type/struct.h"
+#include "src/tint/lang/core/type/swizzle_view.h"
 #include "src/tint/lang/core/type/u32.h"
 #include "src/tint/lang/core/type/u64.h"
 #include "src/tint/lang/core/type/u8.h"
 #include "src/tint/lang/core/type/vector.h"
 #include "src/tint/lang/core/type/void.h"
 #include "src/tint/utils/containers/transform.h"
+#include "src/tint/utils/internal_limits.h"
 #include "src/tint/utils/rtti/switch.h"
 #include "src/tint/utils/text/styled_text.h"
 
@@ -151,10 +154,27 @@ bool IsValidFunctionParamType(const core::type::Type* ty) {
     return false;
 }
 
+/// @returns true if @p ty is a non-struct and decorated with @builtin(position), or if it is a
+/// struct and one of its members is decorated, otherwise false.
+/// @param attr attributes attached to data
+/// @param ty type of the data being tested
+bool IsPositionPresent(const IOAttributes& attr, const core::type::Type* ty) {
+    if (auto* ty_struct = ty->As<core::type::Struct>()) {
+        for (const auto* mem : ty_struct->Members()) {
+            if (mem->Attributes().builtin == BuiltinValue::kPosition) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    return attr.builtin == BuiltinValue::kPosition;
+}
+
 }  // namespace
 
 Functional::Functional(const Module& ir, diag::List& diagnostics, ErrorSource error_source)
-    : ir_(ir), diag_(diagnostics), error_source_(error_source) {}
+    : ir_(ir), diag_(diagnostics), error_source_(error_source), referenced_module_vars_(ir) {}
 
 Functional::~Functional() = default;
 
@@ -185,6 +205,67 @@ StyledText Functional::NameOf(const Value* value) {
         return StyledText{} << ir_.NameOf(value).to_str();
     }
     return Disassemble().NameOf(value);
+}
+
+uint64_t Functional::ElementsCount(const core::type::Type* root_ty) {
+    TINT_ASSERT(root_ty);
+
+    Vector<const core::type::Type*, 16> stack;
+    stack.Push(root_ty);
+
+    while (!stack.IsEmpty()) {
+        const core::type::Type* ty = stack.Back();
+
+        if (elements_counts_.Contains(ty)) {
+            stack.Pop();
+            continue;
+        }
+
+        bool children_ready = true;
+        uint64_t count = 0;
+
+        tint::Switch(
+            ty,
+            [&](const core::type::Struct* s) {
+                for (auto* member : s->Members()) {
+                    if (auto res = elements_counts_.Get(member->Type())) {
+                        count += *res;
+                    } else {
+                        stack.Push(member->Type());
+                        children_ready = false;
+                    }
+                }
+            },
+            [&](const core::type::Array* a) {
+                if (auto res = elements_counts_.Get(a->ElemType())) {
+                    uint64_t array_count = 0;
+                    if (auto* const_count = a->Count()->As<core::type::ConstantArrayCount>()) {
+                        array_count = const_count->value;
+                    }
+                    count = array_count * (*res);
+                } else {
+                    stack.Push(a->ElemType());
+                    children_ready = false;
+                }
+            },
+            [&](const core::type::Matrix* m) {
+                if (auto res = elements_counts_.Get(m->ColumnType())) {
+                    count = static_cast<uint64_t>(m->Columns()) * (*res);
+                } else {
+                    stack.Push(m->ColumnType());
+                    children_ready = false;
+                }
+            },
+            [&](const core::type::Vector* v) { count = static_cast<uint64_t>(v->Width()); },
+            [&](Default) { count = 1; });
+
+        if (children_ready) {
+            elements_counts_.Add(ty, count);
+            stack.Pop();
+        }
+    }
+
+    return *elements_counts_.Get(root_ty);
 }
 
 Source Functional::SourceOf(const Function* func) {
@@ -281,6 +362,10 @@ diag::Diagnostic& Functional::AddNote(const Block* blk) {
     return AddNote(src);
 }
 
+diag::Diagnostic& Functional::AddNote(const Function* func) {
+    return AddNote(SourceOf(func));
+}
+
 diag::Diagnostic& Functional::AddNote(const Instruction* inst) {
     return AddNote(SourceOf(inst));
 }
@@ -302,34 +387,7 @@ void Functional::CheckRootBlock(const Block* blk) {
 }
 
 void Functional::CheckFunction(const Function* func) {
-    if (func->IsEntryPoint()) {
-        // Check that there is at most one entry point unless we allow multiple entry points.
-        if (!ir_.properties.Contains(Property::kAllowMultipleEntryPoints)) {
-            if (!entry_point_names_.IsEmpty()) {
-                AddError(func) << "a module with multiple entry points requires the "
-                                  "AllowMultipleEntryPoints property";
-                return;
-            }
-        }
-
-        if (DAWN_UNLIKELY(ir_.NameOf(func).Name().empty())) {
-            AddError(func) << "entry points must have names";
-        } else {
-            // Checking the name early, so its usage can be recorded, even if the function is
-            // malformed.
-            const auto name = ir_.NameOf(func).Name();
-            if (!entry_point_names_.Add(name)) {
-                AddError(func) << "entry point name " << style::Function(name) << " is not unique";
-            }
-        }
-
-        if (func->Stage() == Function::PipelineStage::kCompute) {
-            if (DAWN_UNLIKELY(!func->ReturnType()->Is<core::type::Void>())) {
-                AddError(func) << "compute entry point must not have a return type, found "
-                               << NameOf(func->ReturnType());
-            }
-        }
-    }
+    CheckEntryPoint(func);
 
     // void needs to be filtered out, since it isn't constructible, but used in the IR when no
     // return is specified.
@@ -343,6 +401,111 @@ void Functional::CheckFunction(const Function* func) {
     }
 
     CheckBlock(func->Block());
+}
+
+void Functional::CheckEntryPoint(const Function* func) {
+    if (!func->IsEntryPoint()) {
+        return;
+    }
+
+    // Check that there is at most one entry point unless we allow multiple entry points.
+    if (!ir_.properties.Contains(Property::kAllowMultipleEntryPoints) &&
+        !entry_point_names_.IsEmpty()) {
+        AddError(func) << "a module with multiple entry points requires the "
+                          "AllowMultipleEntryPoints property";
+        return;
+    }
+
+    if (DAWN_UNLIKELY(ir_.NameOf(func).Name().empty())) {
+        AddError(func) << "entry points must have names";
+    } else {
+        // Checking the name early, so its usage can be recorded, even if the function is
+        // malformed.
+        const auto name = ir_.NameOf(func).Name();
+        if (!entry_point_names_.Add(name)) {
+            AddError(func) << "entry point name " << style::Function(name) << " is not unique";
+        }
+    }
+
+    Hashset<BindingPoint, 4> binding_points{};
+    bool seen_immediate = false;
+    for (auto var : referenced_module_vars_.TransitiveReferences(func)) {
+        if (!ir_.properties.Contains(Property::kAllowDuplicateBindings) &&
+            var->BindingPoint().has_value()) {
+            auto bp = var->BindingPoint().value();
+            if (!binding_points.Add(bp)) {
+                AddError(var) << "found non-unique binding point, " << bp
+                              << ", being referenced in entry point, " << NameOf(func);
+            }
+        }
+
+        const auto* mv = var->Result()->Type()->As<core::type::MemoryView>();
+        if (!mv) {
+            continue;
+        }
+
+        auto address_space = mv->AddressSpace();
+        switch (address_space) {
+            case AddressSpace::kImmediate:
+                if (seen_immediate) {
+                    AddError(var) << "multiple user-declared immediate data variables referenced "
+                                     "by entry point "
+                                  << NameOf(func);
+                }
+                seen_immediate = true;
+                continue;
+            case AddressSpace::kWorkgroup:
+                if (!func->IsCompute()) {
+                    AddError(var) << "workgroup variable cannot be used in a " << func->Stage()
+                                  << " shader";
+                }
+                continue;
+            case AddressSpace::kPixelLocal:
+                if (!func->IsFragment()) {
+                    AddError(var) << "pixel_local variable cannot be used in a " << func->Stage()
+                                  << " shader";
+                }
+                continue;
+            case AddressSpace::kIn:
+            case AddressSpace::kOut:
+                break;
+            default:
+                continue;
+        }
+    }
+
+    if (func->IsCompute()) {
+        if (DAWN_UNLIKELY(!func->ReturnType()->Is<core::type::Void>())) {
+            AddError(func) << "compute entry point must not have a return type, found "
+                           << NameOf(func->ReturnType());
+        }
+    } else if (func->IsVertex()) {
+        CheckPositionPresentForVertexOutput(func);
+    }
+}
+
+void Functional::CheckPositionPresentForVertexOutput(const Function* ep) {
+    if (IsPositionPresent(ep->ReturnAttributes(), ep->ReturnType())) {
+        return;
+    }
+
+    for (const auto& var : referenced_module_vars_.TransitiveReferences(ep)) {
+        const auto* ty = var->Result()->Type()->UnwrapPtrOrRef();
+        if (!ty) {
+            continue;
+        }
+
+        const auto attr = var->Attributes();
+        if (IsPositionPresent(attr, ty)) {
+            if (!ir_.properties.Contains(Property::kAllowBackendSpecificShaderIO)) {
+                AddError(var) << "position as part of a `var`, it must be part of the return";
+                AddNote(ep) << "used in entry point here";
+                return;
+            }
+            return;
+        }
+    }
+    AddError(ep) << "position must be declared on the return of a vertex entry point";
 }
 
 void Functional::CheckFunctionParam(const FunctionParam* param) {
@@ -464,6 +627,19 @@ void Functional::CheckVar(const Var* var) {
         return;
     }
 
+    bool generates_initializer = var->Initializer() != nullptr ||
+                                 mv->AddressSpace() == core::AddressSpace::kPrivate ||
+                                 mv->AddressSpace() == core::AddressSpace::kFunction;
+    if (generates_initializer) {
+        if (ElementsCount(result_type->UnwrapPtrOrRef()) >
+            internal_limits::kMaxArrayConstructorElements) {
+            AddError(var) << "type has excessive number of elements (>"
+                          << internal_limits::kMaxArrayConstructorElements
+                          << ") for an initializer";
+            return;
+        }
+    }
+
     // Check that initializer and result type match
     if (var->Initializer()) {
         if (mv->AddressSpace() != AddressSpace::kFunction &&
@@ -551,11 +727,6 @@ void Functional::CheckVar(const Var* var) {
             AddError(var) << "vars in the 'immediate' address space must be host-shareable";
             return;
         }
-
-        if (ContainsType<core::type::F16>(mv->StoreType())) {
-            AddError(var) << "vars in the 'immediate' address space cannot contain f16 types";
-            return;
-        }
     } else if (mv->AddressSpace() == core::AddressSpace::kPixelLocal) {
         if (var->Block() == ir_.root_block) {
             if (!mv->StoreType()->Is<core::type::Struct>()) {
@@ -567,8 +738,13 @@ void Functional::CheckVar(const Var* var) {
 }
 
 void Functional::CheckLet(const Let* l) {
-    auto* value_ty = l->Value()->Type();
     auto* result_ty = l->Result()->Type();
+    if (ElementsCount(result_ty) > internal_limits::kMaxArrayConstructorElements) {
+        AddError(l) << "type has excessive number of elements (>"
+                    << internal_limits::kMaxArrayConstructorElements << ") for an initializer";
+        return;
+    }
+    auto* value_ty = l->Value()->Type();
     if (value_ty != result_ty) {
         AddError(l) << "result type " << NameOf(l->Result()->Type())
                     << " does not match value type " << NameOf(l->Value()->Type());
@@ -599,9 +775,15 @@ void Functional::CheckLet(const Let* l) {
 
 void Functional::CheckConstruct(const Construct* construct) {
     auto* result_type = construct->Result()->Type();
+    if (ElementsCount(result_type) > internal_limits::kMaxArrayConstructorElements) {
+        AddError(construct) << "type has excessive number of elements (>"
+                            << internal_limits::kMaxArrayConstructorElements
+                            << ") for an initializer";
+        return;
+    }
     if (!result_type->IsConstructible()) {
         // We only allow `construct` to create non-constructible types when they are structures that
-        // contain pointers and handle types, with the corresponding capability enabled.
+        // contain pointers and handle types, with the corresponding property enabled.
         if (!(result_type->Is<core::type::Struct>() &&
               ir_.properties.Contains(Property::kAllowMslEntryPointInterface))) {
             AddError(construct) << "type is not constructible";
@@ -818,9 +1000,11 @@ void Functional::CheckAccess(const Access* a) {
         ok = (want_view != nullptr) && ty == want_view->StoreType();
         if (ok) {
             // Also check that the address space and access modes match.
-            ok = obj_view->Is<core::type::Pointer>() == want_view->Is<core::type::Pointer>() &&
-                 obj_view->AddressSpace() == want_view->AddressSpace() &&
-                 obj_view->Access() == want_view->Access();
+            bool base_is_ptr = obj_view->IsAnyOf<core::type::Pointer, core::type::SwizzleView>();
+            ok =
+                base_is_ptr == want_view->IsAnyOf<core::type::Pointer, core::type::SwizzleView>() &&
+                obj_view->AddressSpace() == want_view->AddressSpace() &&
+                obj_view->Access() == want_view->Access();
         }
     } else {
         // Otherwise, result types should exactly match.
@@ -1063,30 +1247,29 @@ void Functional::CheckLoopContinuing(const Loop* loop) {
     // Ensure that values used in the loop continuing are not from the loop body, after a continue
     // instruction.
     auto* first_continue = first_continues_.GetOr(loop, nullptr);
-    if (first_continue == nullptr) {
-        return;
-    }
-
-    // Find the instruction in the body block that is or holds the first continue instruction.
-    const Instruction* holds_continue = first_continue;
-    while (holds_continue && holds_continue->Block() && holds_continue->Block() != loop->Body()) {
-        holds_continue = holds_continue->Block()->Parent();
-    }
-
-    auto check_usage = [&](Usage use) {
-        if (TransitivelyHolds(loop->Continuing(), use.instruction)) {
-            AddError(use.instruction, use.operand_index)
-                << NameOf(use.instruction->Operands()[use.operand_index])
-                << " cannot be used in continuing block as it is declared after the first "
-                << style::Instruction("continue") << " in the loop's body";
-            AddNote(first_continue) << "loop body's first " << style::Instruction("continue");
+    if (first_continue != nullptr) {
+        // Find the instruction in the body block that is or holds the first continue instruction.
+        const Instruction* holds_continue = first_continue;
+        while (holds_continue && holds_continue->Block() &&
+               holds_continue->Block() != loop->Body()) {
+            holds_continue = holds_continue->Block()->Parent();
         }
-    };
 
-    // Check that all subsequent instruction values are not used in the continuing block.
-    for (auto* inst = holds_continue; inst; inst = inst->next) {
-        for (auto* result : inst->Results()) {
-            result->ForEachUseUnsorted(check_usage);
+        auto check_usage = [&](Usage use) {
+            if (TransitivelyHolds(loop->Continuing(), use.instruction)) {
+                AddError(use.instruction, use.operand_index)
+                    << NameOf(use.instruction->Operands()[use.operand_index])
+                    << " cannot be used in continuing block as it is declared after the first "
+                    << style::Instruction("continue") << " in the loop's body";
+                AddNote(first_continue) << "loop body's first " << style::Instruction("continue");
+            }
+        };
+
+        // Check that all subsequent instruction values are not used in the continuing block.
+        for (auto* inst = holds_continue; inst; inst = inst->next) {
+            for (auto* result : inst->Results()) {
+                result->ForEachUseUnsorted(check_usage);
+            }
         }
     }
 
@@ -1147,7 +1330,12 @@ void Functional::CheckSwitch(const Switch* s) {
 }
 
 void Functional::CheckSwizzle(const Swizzle* s) {
-    auto* src_vec = s->Object()->Type()->As<core::type::Vector>();
+    auto* result_ty = s->Result()->Type();
+
+    auto* obj_ty = s->Object()->Type();
+    auto* src_mv = obj_ty->As<core::type::MemoryView>();
+    auto* src_vec =
+        src_mv ? src_mv->StoreType()->As<core::type::Vector>() : obj_ty->As<core::type::Vector>();
     if (!src_vec) {
         AddError(s) << "object of swizzle, " << NameOf(s->Object()) << ", is not a vector, "
                     << NameOf(s->Object()->Type());
@@ -1174,8 +1362,16 @@ void Functional::CheckSwizzle(const Swizzle* s) {
     }
 
     auto* elem_ty = src_vec->Elements().type;
-    auto* expected_ty = type_mgr_.MatchWidth(elem_ty, indices.Length());
-    auto* result_ty = s->Result()->Type();
+    auto* expected_store_ty = type_mgr_.MatchWidth(elem_ty, indices.Length());
+    const core::type::Type* expected_ty = nullptr;
+    if (src_mv) {
+        expected_ty = type_mgr_.Get<core::type::SwizzleView>(
+            src_mv->AddressSpace(), expected_store_ty, src_mv->Access(), src_vec->Width(),
+            static_cast<uint32_t>(indices.Length()));
+    } else {
+        expected_ty = expected_store_ty;
+    }
+
     if (result_ty != expected_ty) {
         AddError(s) << "result type " << NameOf(result_ty) << " does not match expected type, "
                     << NameOf(expected_ty);

@@ -43,6 +43,7 @@
 #include "src/utils/assert.h"
 #include "src/utils/compiler.h"
 #include "src/utils/log.h"
+#include "src/utils/span.h"
 
 namespace {
 
@@ -50,13 +51,14 @@ class DevNull : public dawn::wire::CommandSerializer {
   public:
     size_t GetMaximumAllocationSize() const override {
         // Some fuzzer bots have a 2GB allocation limit. Pick a value reasonably below that.
-        return 1024 * 1024 * 1024;
+        return 1024ULL * 1024 * 1024;
     }
-    void* GetCmdSpace(size_t size) override {
+    std::optional<std::span<volatile std::byte>> GetCommandSpace(size_t size) override {
         if (size > buf.size()) {
             buf.resize(size);
         }
-        return buf.data();
+        return std::span<volatile std::byte>(reinterpret_cast<volatile std::byte*>(buf.data()),
+                                             size);
     }
     bool Flush() override { return true; }
 
@@ -95,10 +97,13 @@ int DawnWireServerFuzzer::Run(const uint8_t* data,
         return 0;
     }
 
+    // SAFETY: |data| is provided by the fuzzer and is assumed to be valid.
+    dawn::Span<const std::byte> DAWN_UNSAFE_BUFFERS(
+        commands{reinterpret_cast<const std::byte*>(data), size});
+
     // Get and consume the injected error index.
-    uint64_t injectedErrorIndex = *reinterpret_cast<const uint64_t*>(data);
-    DAWN_UNSAFE_TODO(data += sizeof(uint64_t));
-    size -= sizeof(uint64_t);
+    uint64_t injectedErrorIndex =
+        dawn::ReinterpretSpan<const uint64_t>(commands.TakeFirst(sizeof(uint64_t)))[0];
 
     if (supportsErrorInjection) {
         dawn::native::EnableErrorInjector();
@@ -147,6 +152,6 @@ int DawnWireServerFuzzer::Run(const uint8_t* data,
 
     std::unique_ptr<dawn::wire::WireServer> wireServer(new dawn::wire::WireServer(serverDesc));
     wireServer->InjectInstance(instance->Get(), {1, 0});
-    wireServer->HandleCommands(reinterpret_cast<const char*>(data), size);
+    wireServer->HandleCommands(commands);
     return 0;
 }

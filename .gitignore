@@ -11,9 +11,11 @@
 /bazel-*
 /build
 /buildtools
+/src/cmake/HermeticXcode/ranlib
 /testing
 /third_party/abseil-cpp/
 /third_party/agility-sdk/src
+/third_party/android_toolchain/ndk
 /third_party/angle
 /third_party/binutils
 /third_party/catapult
@@ -25,8 +27,9 @@
 /third_party/glfw3/src
 /third_party/glslang/src/
 /third_party/google_benchmark/src
-/third_party/googletest
+/third_party/googletest/src
 /third_party/gpuweb
+/third_party/jdk/current
 /third_party/jinja2
 /third_party/jsoncpp
 /third_party/EGL-Registry/src
@@ -34,7 +37,10 @@
 /third_party/libc++/src
 /third_party/libc++abi/src
 /third_party/libprotobuf-mutator/src
+/third_party/litert-lm/data
+/third_party/litert-lm/src
 /third_party/llvm-build
+/third_party/llvm-dev
 /third_party/markupsafe
 /third_party/mesa/src
 /third_party/meson/src
@@ -57,6 +63,7 @@
 /third_party/vulkan_memory_allocator
 /third_party/webgpu-cts
 /third_party/zlib
+/tools/bazelisk
 /tools/bin
 /tools/clang
 /tools/cmake*
@@ -174,3 +181,10 @@ GEMINI.md
 
 ### Jetski
 .jetskicli
+
+### run-tricium-clang-tidy.py outputs
+/clang-tidy-*-findings.json
+/clang-tidy-*-summary.txt
+
+### fuzz --triage outputs
+clusterfuzz-testcase-minimized-*

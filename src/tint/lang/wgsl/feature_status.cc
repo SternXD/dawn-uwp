@@ -39,7 +39,6 @@ FeatureStatus GetLanguageFeatureStatus(LanguageFeature f) {
         case LanguageFeature::kSizedBindingArray:
         case LanguageFeature::kTexelBuffers:
         case LanguageFeature::kFragmentDepth:
-        case LanguageFeature::kBufferView:
         case LanguageFeature::kSwizzleAssignment:
             return FeatureStatus::kUnsafeExperimental;
 
@@ -58,7 +57,7 @@ FeatureStatus GetLanguageFeatureStatus(LanguageFeature f) {
         case LanguageFeature::kTextureAndSamplerLet:
         case LanguageFeature::kTextureFormatsTier1:
         case LanguageFeature::kLinearIndexing:
-        case LanguageFeature::kImmediateAddressSpace:
+        case LanguageFeature::kBufferView:
             return FeatureStatus::kShippedWithKillswitch;
 
             ////////////////////////////////////////////////////////////////////
@@ -68,6 +67,7 @@ FeatureStatus GetLanguageFeatureStatus(LanguageFeature f) {
         case LanguageFeature::kPointerCompositeAccess:
         case LanguageFeature::kReadonlyAndReadwriteStorageTextures:
         case LanguageFeature::kUnrestrictedPointerParameters:
+        case LanguageFeature::kImmediateAddressSpace:
             return FeatureStatus::kShipped;
 
             ////////////////////////////////////////////////////////////////////

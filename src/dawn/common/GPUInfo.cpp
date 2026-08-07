@@ -64,7 +64,7 @@ const uint16_t& DriverVersion::operator[](size_t i) const {
     return mDriverVersion.operator[](i);
 }
 
-uint32_t DriverVersion::size() const {
+size_t DriverVersion::size() const {
     return mDriverVersion.size();
 }
 
@@ -152,6 +152,11 @@ QualcommACPIGen GetQualcommACPIGen(PCIVendorID venderId, PCIDeviceID deviceId) {
 // ARM GPUs
 bool IsMaliG68(PCIDeviceID deviceId) {
     return deviceId == kMaliG68;
+}
+
+bool IsTileBasedRenderer(PCIVendorID vendorId, PCIDeviceID /*deviceId*/) {
+    return IsARM(vendorId) || IsImgTec(vendorId) || IsQualcommPCI(vendorId) ||
+           IsQualcommACPI(vendorId) || IsApple(vendorId);
 }
 
 }  // namespace dawn::gpu_info

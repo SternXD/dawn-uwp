@@ -68,6 +68,7 @@
 #include "src/dawn/native/vulkan/UtilsVulkan.h"
 #include "src/dawn/native/vulkan/VulkanError.h"
 #include "src/utils/compiler.h"
+#include "src/utils/numeric.h"
 
 namespace dawn::native::vulkan {
 
@@ -83,6 +84,33 @@ VkIndexType VulkanIndexType(wgpu::IndexFormat format) {
             break;
     }
     DAWN_UNREACHABLE();
+}
+
+std::vector<VkBufferImageCopy> ComputePerArrayLayerBufferImageCopyRegions(
+    const BufferCopy& bufferCopy,
+    const TextureCopy& textureCopy,
+    const TexelExtent3D& copySize,
+    const TypedTexelBlockInfo& blockInfo) {
+    const uint64_t bytesPerImage =
+        blockInfo.ToBytes(bufferCopy.blocksPerRow) * static_cast<uint64_t>(bufferCopy.rowsPerImage);
+    const uint32_t layerCount =
+        static_cast<uint32_t>(static_cast<uint64_t>(copySize.depthOrArrayLayers));
+
+    TexelExtent3D singleLayerSize = copySize;
+    singleLayerSize.depthOrArrayLayers = TexelCount{1u};
+
+    std::vector<VkBufferImageCopy> regions;
+    regions.reserve(layerCount);
+    for (uint32_t layer = 0; layer < layerCount; ++layer) {
+        TextureCopy layerTextureCopy = textureCopy;
+        layerTextureCopy.origin.z = textureCopy.origin.z + TexelCount{layer};
+
+        VkBufferImageCopy region = ComputeBufferImageCopyRegion(bufferCopy, layerTextureCopy,
+                                                                blockInfo.ToBlock(singleLayerSize));
+        region.bufferOffset = bufferCopy.offset + uint64_t{layer} * bytesPerImage;
+        regions.push_back(region);
+    }
+    return regions;
 }
 
 bool HasSameTextureCopyExtent(const TextureCopy& srcCopy,
@@ -110,8 +138,8 @@ VkImageCopy ComputeImageCopyRegion(const TextureCopy& srcCopy,
 
     bool has3DTextureInCopy = false;
 
-    region.srcOffset.x = dchecked_cast<uint32_t>(srcCopy.origin.x);
-    region.srcOffset.y = dchecked_cast<uint32_t>(srcCopy.origin.y);
+    region.srcOffset.x = dchecked_cast<int32_t>(srcCopy.origin.x);
+    region.srcOffset.y = dchecked_cast<int32_t>(srcCopy.origin.y);
     switch (srcTexture->GetDimension()) {
         case wgpu::TextureDimension::Undefined:
             DAWN_UNREACHABLE();
@@ -129,12 +157,12 @@ VkImageCopy ComputeImageCopyRegion(const TextureCopy& srcCopy,
             has3DTextureInCopy = true;
             region.srcSubresource.baseArrayLayer = 0;
             region.srcSubresource.layerCount = 1;
-            region.srcOffset.z = dchecked_cast<uint32_t>(srcCopy.origin.z);
+            region.srcOffset.z = dchecked_cast<int32_t>(srcCopy.origin.z);
             break;
     }
 
-    region.dstOffset.x = dchecked_cast<uint32_t>(dstCopy.origin.x);
-    region.dstOffset.y = dchecked_cast<uint32_t>(dstCopy.origin.y);
+    region.dstOffset.x = dchecked_cast<int32_t>(dstCopy.origin.x);
+    region.dstOffset.y = dchecked_cast<int32_t>(dstCopy.origin.y);
     switch (dstTexture->GetDimension()) {
         case wgpu::TextureDimension::Undefined:
             DAWN_UNREACHABLE();
@@ -152,7 +180,7 @@ VkImageCopy ComputeImageCopyRegion(const TextureCopy& srcCopy,
             has3DTextureInCopy = true;
             region.dstSubresource.baseArrayLayer = 0;
             region.dstSubresource.layerCount = 1;
-            region.dstOffset.z = dchecked_cast<uint32_t>(dstCopy.origin.z);
+            region.dstOffset.z = dchecked_cast<int32_t>(dstCopy.origin.z);
             break;
     }
 
@@ -177,31 +205,31 @@ VkRect2D GetAlignedRenderArea(VkExtent2D granularity, BeginRenderPassCmd* render
     }
 
     if (granularity.width == 0 || granularity.width == 1) {
-        renderArea.offset.x = renderPassCmd->renderArea.x;
+        renderArea.offset.x = sign_cast(renderPassCmd->renderArea.x);
         renderArea.extent.width = renderPassCmd->renderArea.width;
     } else {
-        renderArea.offset.x = AlignDown(renderPassCmd->renderArea.x, granularity.width);
+        renderArea.offset.x = sign_cast(AlignDown(renderPassCmd->renderArea.x, granularity.width));
 
         uint32_t right =
             Align(renderPassCmd->renderArea.x + renderPassCmd->renderArea.width, granularity.width);
         if (right > renderPassCmd->width) {
             right = renderPassCmd->width;
         }
-        renderArea.extent.width = right - renderArea.offset.x;
+        renderArea.extent.width = right - sign_cast(renderArea.offset.x);
     }
 
     if (granularity.height == 0 || granularity.height == 1) {
-        renderArea.offset.y = renderPassCmd->renderArea.y;
+        renderArea.offset.y = sign_cast(renderPassCmd->renderArea.y);
         renderArea.extent.height = renderPassCmd->renderArea.height;
     } else {
-        renderArea.offset.y = AlignDown(renderPassCmd->renderArea.y, granularity.height);
+        renderArea.offset.y = sign_cast(AlignDown(renderPassCmd->renderArea.y, granularity.height));
 
         uint32_t bottom = Align(renderPassCmd->renderArea.y + renderPassCmd->renderArea.height,
                                 granularity.height);
         if (bottom > renderPassCmd->height) {
             bottom = renderPassCmd->height;
         }
-        renderArea.extent.height = bottom - renderArea.offset.y;
+        renderArea.extent.height = bottom - sign_cast(renderArea.offset.y);
     }
 
     return renderArea;
@@ -221,7 +249,8 @@ VkRect2D GetAlignedRenderArea(Device* device,
 class DescriptorSetTracker : public BindGroupTrackerBase<true> {
   public:
     bool AreLayoutsCompatible() override {
-        return mPipelineLayout == mLastAppliedPipelineLayout &&
+        return mLastAppliedPipeline != nullptr &&
+               mLastAppliedPipeline->GetLayout() == mPipeline->GetLayout() &&
                mLastAppliedImmediateSize == mImmediateSize;
     }
 
@@ -254,7 +283,7 @@ class DescriptorSetTracker : public BindGroupTrackerBase<true> {
     void Apply(const VulkanFunctions& vk,
                VkCommandBuffer commandBuffer,
                VkPipelineBindPoint bindPoint) {
-        Apply(vk, commandBuffer, bindPoint,
+        Apply(vk, commandBuffer, bindPoint, mVkLayout,
               [&](BindGroupIndex i) { return ToBackend(mBindGroups[i])->GetHandle(); });
     }
 
@@ -262,6 +291,7 @@ class DescriptorSetTracker : public BindGroupTrackerBase<true> {
     void Apply(const VulkanFunctions& vk,
                VkCommandBuffer commandBuffer,
                VkPipelineBindPoint bindPoint,
+               VkPipelineLayout layout,
                F GetDescriptorSet) {
         BeforeApply();
 
@@ -284,7 +314,7 @@ class DescriptorSetTracker : public BindGroupTrackerBase<true> {
 
             if (mFramebufferFetchEnabled) {
                 DAWN_ASSERT(mFramebufferFetchDescriptorSet != VK_NULL_HANDLE);
-                vk.CmdBindDescriptorSets(commandBuffer, bindPoint, mVkLayout,
+                vk.CmdBindDescriptorSets(commandBuffer, bindPoint, layout,
                                          static_cast<uint32_t>(startOfBindGroups), 1,
                                          &*mFramebufferFetchDescriptorSet, 0, nullptr);
             }
@@ -303,7 +333,7 @@ class DescriptorSetTracker : public BindGroupTrackerBase<true> {
             if (mUsesResourceTable) {
                 DAWN_ASSERT(mResourceTable != nullptr);
                 VkDescriptorSet set = mResourceTable->GetHandle();
-                vk.CmdBindDescriptorSets(commandBuffer, bindPoint, mVkLayout,
+                vk.CmdBindDescriptorSets(commandBuffer, bindPoint, layout,
                                          static_cast<uint32_t>(startOfBindGroups), 1, &*set, 0,
                                          nullptr);
             }
@@ -320,7 +350,7 @@ class DescriptorSetTracker : public BindGroupTrackerBase<true> {
             uint32_t count = static_cast<uint32_t>(dynamicOffsetSpan.size());
             const uint32_t* dynamicOffset = count > 0 ? dynamicOffsetSpan.data() : nullptr;
 
-            vk.CmdBindDescriptorSets(commandBuffer, bindPoint, mVkLayout, setIndex, 1, &*set, count,
+            vk.CmdBindDescriptorSets(commandBuffer, bindPoint, layout, setIndex, 1, &*set, count,
                                      dynamicOffset);
         }
 
@@ -385,7 +415,8 @@ class ImmediateTracker : public T {
                 GetImmediateIndexInPipeline(static_cast<uint32_t>(offset), pipelineMask) *
                 kImmediateElementByteSize;
             vk.CmdPushConstants(commandBuffer, layout, kImmediateShaderStages,
-                                pushConstantRangeStartOffset, size * kImmediateElementByteSize,
+                                pushConstantRangeStartOffset,
+                                checked_cast<uint32_t>(size * kImmediateElementByteSize),
                                 this->mContent.template Get<uint32_t>(immediateContentStartOffset));
         }
 
@@ -401,8 +432,13 @@ MaybeError PrepareResourcesForSyncScope(Device* device,
                                         const SyncScopeResourceUsage& scope) {
     // Apply pending updates to all resource tables used in usages scope.
     // This has to be done before transitioning resources.
-    for (auto& resourceTable : scope.usedResourceTables) {
-        DAWN_TRY(ToBackend(resourceTable)->ApplyPendingUpdates(recordingContext));
+    // TODO(crbug.com/529883743): Consider folding the logic in GatherWritableTextures into the
+    // scope.textures loop below
+    if (!scope.usedResourceTables.empty()) {
+        auto writables = GatherWritableTextures(scope);
+        for (auto& resourceTable : scope.usedResourceTables) {
+            DAWN_TRY(ToBackend(resourceTable)->ApplyPendingUpdates(recordingContext, writables));
+        }
     }
 
     // Separate barriers with vertex stages in destination stages from all other barriers.
@@ -492,9 +528,10 @@ MaybeError PrepareResourcesForSyncScope(Device* device,
 
     for (const ImageBarriers& barriers : {vertexImageBarriers, nonVertexImageBarriers}) {
         if (!barriers.imageBarriers.empty()) {
-            device->fn.CmdPipelineBarrier(
-                recordingContext->commandBuffer, barriers.srcStages, barriers.dstStages, 0, 0,
-                nullptr, 0, nullptr, barriers.imageBarriers.size(), barriers.imageBarriers.data());
+            device->fn.CmdPipelineBarrier(recordingContext->commandBuffer, barriers.srcStages,
+                                          barriers.dstStages, 0, 0, nullptr, 0, nullptr,
+                                          checked_cast<uint32_t>(barriers.imageBarriers.size()),
+                                          barriers.imageBarriers.data());
         }
     }
     recordingContext->EmitBufferBarrierIfNecessary(device, vertexBufferBarrier);
@@ -565,25 +602,19 @@ VkClearValue ToVkClearValue(dawn::native::Color clearColor, TextureComponentType
     switch (baseType) {
         case TextureComponentType::Float: {
             const std::array<float, 4> appliedClearColor = ConvertToFloatColor(clearColor);
-            for (uint32_t j = 0; j < 4; ++j) {
-                DAWN_UNSAFE_TODO(clearValue.color.float32[j]) = appliedClearColor[j];
-            }
+            Span<float>{clearValue.color.float32}.CopyFrom(appliedClearColor);
             break;
         }
         case TextureComponentType::Uint: {
             const std::array<uint32_t, 4> appliedClearColor =
                 ConvertToUnsignedIntegerColor(clearColor);
-            for (uint32_t j = 0; j < 4; ++j) {
-                DAWN_UNSAFE_TODO(clearValue.color.uint32[j]) = appliedClearColor[j];
-            }
+            Span<uint32_t>{clearValue.color.uint32}.CopyFrom(appliedClearColor);
             break;
         }
         case TextureComponentType::Sint: {
             const std::array<int32_t, 4> appliedClearColor =
                 ConvertToSignedIntegerColor(clearColor);
-            for (uint32_t j = 0; j < 4; ++j) {
-                DAWN_UNSAFE_TODO(clearValue.color.int32[j]) = appliedClearColor[j];
-            }
+            Span<int32_t>{clearValue.color.int32}.CopyFrom(appliedClearColor);
             break;
         }
     }
@@ -715,7 +746,7 @@ struct ProgrammablePassState : public StackAllocated {
         VkCommandBuffer commands = recordingContext->commandBuffer;
 
         vk.CmdBindPipeline(commands, PipelineBindPoint, pipelineHandles.pipeline);
-        descriptorSets.Apply(vk, commands, PipelineBindPoint,
+        descriptorSets.Apply(vk, commands, PipelineBindPoint, pipelineHandles.layout,
                              [&](BindGroupIndex i) { return newDescriptorSets[i]->GetHandle(); });
         immediates.Apply(vk, commands, pipelineHandles.layout, lastPipeline->GetImmediateMask());
 
@@ -903,7 +934,7 @@ MaybeError RecordBeginRenderPass(CommandRecordingContext* recordingContext,
 
     // Query a VkRenderPass from the cache
     VkRenderPass renderPassVK = VK_NULL_HANDLE;
-    uint32_t renderPassId = 0;
+    uint64_t renderPassId = 0;
     {
         RenderPassCacheQuery query;
 
@@ -1167,15 +1198,21 @@ MaybeError CommandBuffer::RecordCommands(CommandRecordingContext* recordingConte
                 ToBackend(src.buffer)->EnsureDataInitialized(recordingContext);
 
                 const TypedTexelBlockInfo& blockInfo = GetBlockInfo(dst);
-                VkBufferImageCopy region =
-                    ComputeBufferImageCopyRegion(src, dst, blockInfo.ToBlock(copy->copySize));
-                VkImageSubresourceLayers subresource = region.imageSubresource;
+                std::vector<VkBufferImageCopy> regions;
+                if (device->IsToggleEnabled(Toggle::VulkanSplitBufferTextureCopyForArrayLayers) &&
+                    copy->copySize.depthOrArrayLayers > TexelCount{1u}) {
+                    regions = ComputePerArrayLayerBufferImageCopyRegions(src, dst, copy->copySize,
+                                                                         blockInfo);
+                } else {
+                    regions.push_back(
+                        ComputeBufferImageCopyRegion(src, dst, blockInfo.ToBlock(copy->copySize)));
+                }
 
                 SubresourceRange range =
                     GetSubresourcesAffectedByCopy(copy->destination, copy->copySize);
 
-                if (IsCompleteSubresourceCopiedTo(dst.texture.Get(), copy->copySize,
-                                                  subresource.mipLevel, dst.aspect)) {
+                if (IsCompleteSubresourceCopiedTo(dst.texture.Get(), copy->copySize, dst.mipLevel,
+                                                  dst.aspect)) {
                     // Since texture has been overwritten, it has been "initialized"
                     dst.texture->SetIsSubresourceContentInitialized(true, range);
                 } else {
@@ -1194,8 +1231,9 @@ MaybeError CommandBuffer::RecordCommands(CommandRecordingContext* recordingConte
 
                 // Dawn guarantees dstImage be in the TRANSFER_DST_OPTIMAL layout after the
                 // copy command.
-                device->fn.CmdCopyBufferToImage(commands, srcBuffer, dstImage,
-                                                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+                device->fn.CmdCopyBufferToImage(
+                    commands, srcBuffer, dstImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    static_cast<uint32_t>(regions.size()), regions.data());
                 break;
             }
 
@@ -1211,8 +1249,15 @@ MaybeError CommandBuffer::RecordCommands(CommandRecordingContext* recordingConte
                 ToBackend(dst.buffer)->EnsureDataInitializedAsDestination(recordingContext, copy);
 
                 const TypedTexelBlockInfo& blockInfo = GetBlockInfo(src);
-                VkBufferImageCopy region =
-                    ComputeBufferImageCopyRegion(dst, src, blockInfo.ToBlock(copy->copySize));
+                std::vector<VkBufferImageCopy> regions;
+                if (device->IsToggleEnabled(Toggle::VulkanSplitBufferTextureCopyForArrayLayers) &&
+                    copy->copySize.depthOrArrayLayers > TexelCount{1u}) {
+                    regions = ComputePerArrayLayerBufferImageCopyRegions(dst, src, copy->copySize,
+                                                                         blockInfo);
+                } else {
+                    regions.push_back(
+                        ComputeBufferImageCopyRegion(dst, src, blockInfo.ToBlock(copy->copySize)));
+                }
 
                 SubresourceRange range =
                     GetSubresourcesAffectedByCopy(copy->source, copy->copySize);
@@ -1230,7 +1275,8 @@ MaybeError CommandBuffer::RecordCommands(CommandRecordingContext* recordingConte
                 VkBuffer dstBuffer = ToBackend(dst.buffer)->GetHandle();
                 // The Dawn CopySrc usage is always mapped to GENERAL
                 device->fn.CmdCopyImageToBuffer(commands, srcImage, VK_IMAGE_LAYOUT_GENERAL,
-                                                dstBuffer, 1, &region);
+                                                dstBuffer, static_cast<uint32_t>(regions.size()),
+                                                regions.data());
                 break;
             }
 
@@ -1374,6 +1420,10 @@ MaybeError CommandBuffer::RecordCommands(CommandRecordingContext* recordingConte
 
             case Command::ResolveQuerySet: {
                 ResolveQuerySetCmd* cmd = mCommands.NextCommand<ResolveQuerySetCmd>();
+                if (cmd->queryCount == QueryIndex{0u}) {
+                    continue;
+                }
+
                 QuerySet* querySet = ToBackend(cmd->querySet.Get());
                 Buffer* destination = ToBackend(cmd->destination.Get());
 
@@ -1419,11 +1469,11 @@ MaybeError CommandBuffer::RecordCommands(CommandRecordingContext* recordingConte
             case Command::InsertDebugMarker: {
                 if (device->GetGlobalInfo().HasExt(InstanceExt::DebugUtils)) {
                     InsertDebugMarkerCmd* cmd = mCommands.NextCommand<InsertDebugMarkerCmd>();
-                    const char* label = mCommands.NextData<char>(cmd->length + 1);
+                    std::string_view label = NextNullTerminatedString(&mCommands, cmd->length);
                     VkDebugUtilsLabelEXT utilsLabel;
                     utilsLabel.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT;
                     utilsLabel.pNext = nullptr;
-                    utilsLabel.pLabelName = label;
+                    utilsLabel.pLabelName = label.data();
                     // Default color to black
                     utilsLabel.color[0] = 0.0;
                     utilsLabel.color[1] = 0.0;
@@ -1449,11 +1499,11 @@ MaybeError CommandBuffer::RecordCommands(CommandRecordingContext* recordingConte
             case Command::PushDebugGroup: {
                 if (device->GetGlobalInfo().HasExt(InstanceExt::DebugUtils)) {
                     PushDebugGroupCmd* cmd = mCommands.NextCommand<PushDebugGroupCmd>();
-                    const char* label = mCommands.NextData<char>(cmd->length + 1);
+                    std::string_view label = NextNullTerminatedString(&mCommands, cmd->length);
                     VkDebugUtilsLabelEXT utilsLabel;
                     utilsLabel.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT;
                     utilsLabel.pNext = nullptr;
-                    utilsLabel.pLabelName = label;
+                    utilsLabel.pLabelName = label.data();
                     // Default color to black
                     utilsLabel.color[0] = 0.0;
                     utilsLabel.color[1] = 0.0;
@@ -1469,28 +1519,28 @@ MaybeError CommandBuffer::RecordCommands(CommandRecordingContext* recordingConte
             case Command::WriteBuffer: {
                 WriteBufferCmd* write = mCommands.NextCommand<WriteBufferCmd>();
                 const uint64_t offset = write->offset;
-                const uint64_t size = write->size;
-                uint8_t* data = mCommands.NextData<uint8_t>(size);
+                Span<const uint8_t> data = mCommands.NextData<uint8_t>(write->size);
 
-                if (size == 0) {
+                if (data.empty()) {
                     continue;
                 }
 
                 Buffer* dstBuffer = ToBackend(write->buffer.Get());
 
+                // TODO(https://crbug.com/534203108): Spanify WithUploadReservation.
                 DAWN_UNSAFE_TODO(DAWN_TRY(device->GetDynamicUploader()->WithUploadReservation(
-                    size, kCopyBufferToBufferOffsetAlignment,
+                    data.size(), kCopyBufferToBufferOffsetAlignment,
                     [&](UploadReservation reservation) -> MaybeError {
-                        memcpy(reservation.mappedPointer, data, size);
+                        memcpy(reservation.mappedPointer, data.data(), data.size());
 
                         dstBuffer->EnsureDataInitializedAsDestination(recordingContext, offset,
-                                                                      size);
+                                                                      data.size());
                         dstBuffer->TransitionUsageNow(recordingContext, wgpu::BufferUsage::CopyDst);
 
                         VkBufferCopy copy;
                         copy.srcOffset = reservation.offsetInBuffer;
                         copy.dstOffset = offset;
-                        copy.size = size;
+                        copy.size = data.size();
 
                         device->fn.CmdCopyBuffer(commands,
                                                  ToBackend(reservation.buffer)->GetHandle(),
@@ -1523,7 +1573,7 @@ MaybeError CommandBuffer::RecordComputePass(CommandRecordingContext* recordingCo
 
     VkCommandBuffer commands = recordingContext->commandBuffer;
 
-    uint64_t currentDispatch = 0;
+    size_t currentDispatch = 0;
     ComputePassState state(device->fn, recordingContext);
 
     Command type;
@@ -1575,15 +1625,13 @@ MaybeError CommandBuffer::RecordComputePass(CommandRecordingContext* recordingCo
 
             case Command::SetBindGroup: {
                 SetBindGroupCmd* cmd = mCommands.NextCommand<SetBindGroupCmd>();
-
                 BindGroup* bindGroup = ToBackend(cmd->group.Get());
-                uint32_t* dynamicOffsets = nullptr;
-                if (cmd->dynamicOffsetCount > 0) {
+                ityp::span<BindingIndex, const uint32_t> dynamicOffsets;
+                if (cmd->dynamicOffsetCount != BindingIndex{0u}) {
                     dynamicOffsets = mCommands.NextData<uint32_t>(cmd->dynamicOffsetCount);
                 }
 
-                state.descriptorSets.OnSetBindGroup(cmd->index, bindGroup, cmd->dynamicOffsetCount,
-                                                    dynamicOffsets);
+                state.descriptorSets.OnSetBindGroup(cmd->index, bindGroup, dynamicOffsets);
                 break;
             }
 
@@ -1596,11 +1644,11 @@ MaybeError CommandBuffer::RecordComputePass(CommandRecordingContext* recordingCo
             case Command::InsertDebugMarker: {
                 if (device->GetGlobalInfo().HasExt(InstanceExt::DebugUtils)) {
                     InsertDebugMarkerCmd* cmd = mCommands.NextCommand<InsertDebugMarkerCmd>();
-                    const char* label = mCommands.NextData<char>(cmd->length + 1);
+                    std::string_view label = NextNullTerminatedString(&mCommands, cmd->length);
                     VkDebugUtilsLabelEXT utilsLabel;
                     utilsLabel.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT;
                     utilsLabel.pNext = nullptr;
-                    utilsLabel.pLabelName = label;
+                    utilsLabel.pLabelName = label.data();
                     // Default color to black
                     utilsLabel.color[0] = 0.0;
                     utilsLabel.color[1] = 0.0;
@@ -1626,11 +1674,11 @@ MaybeError CommandBuffer::RecordComputePass(CommandRecordingContext* recordingCo
             case Command::PushDebugGroup: {
                 if (device->GetGlobalInfo().HasExt(InstanceExt::DebugUtils)) {
                     PushDebugGroupCmd* cmd = mCommands.NextCommand<PushDebugGroupCmd>();
-                    const char* label = mCommands.NextData<char>(cmd->length + 1);
+                    std::string_view label = NextNullTerminatedString(&mCommands, cmd->length);
                     VkDebugUtilsLabelEXT utilsLabel;
                     utilsLabel.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT;
                     utilsLabel.pNext = nullptr;
-                    utilsLabel.pLabelName = label;
+                    utilsLabel.pLabelName = label.data();
                     // Default color to black
                     utilsLabel.color[0] = 0.0;
                     utilsLabel.color[1] = 0.0;
@@ -1656,9 +1704,9 @@ MaybeError CommandBuffer::RecordComputePass(CommandRecordingContext* recordingCo
             case Command::SetImmediates: {
                 SetImmediatesCmd* cmd = mCommands.NextCommand<SetImmediatesCmd>();
                 DAWN_ASSERT(cmd->size > 0);
-                uint8_t* value = nullptr;
-                value = mCommands.NextData<uint8_t>(cmd->size);
-                state.immediates.SetImmediates(cmd->offset, value, cmd->size);
+                Span<const uint8_t> data = mCommands.NextData<uint8_t>(cmd->size);
+                // TODO(https://crbug.com/532946455): Spanify ImmediateTracker.
+                state.immediates.SetImmediates(cmd->offset, data.data(), data.size());
                 break;
             }
 
@@ -1734,8 +1782,8 @@ MaybeError CommandBuffer::RecordRenderPass(CommandRecordingContext* recordingCon
         device->fn.CmdSetViewport(commands, 0, 1, &viewport);
 
         VkRect2D scissorRect;
-        scissorRect.offset.x = renderPassCmd->renderArea.x;
-        scissorRect.offset.y = renderPassCmd->renderArea.y;
+        scissorRect.offset.x = static_cast<int32_t>(renderPassCmd->renderArea.x);
+        scissorRect.offset.y = static_cast<int32_t>(renderPassCmd->renderArea.y);
         scissorRect.extent.width = renderPassCmd->renderArea.width;
         scissorRect.extent.height = renderPassCmd->renderArea.height;
         device->fn.CmdSetScissor(commands, 0, 1, &scissorRect);
@@ -1753,10 +1801,13 @@ MaybeError CommandBuffer::RecordRenderPass(CommandRecordingContext* recordingCon
                 workCommandCount++;
                 DrawCmd* draw = iter->NextCommand<DrawCmd>();
 
-                DAWN_TRY(state.SyncAndRun([&](const VulkanFunctions& vk, VkCommandBuffer commands) {
-                    vk.CmdDraw(commands, draw->vertexCount, draw->instanceCount, draw->firstVertex,
-                               draw->firstInstance);
-                }));
+                if (draw->vertexCount > 0 && draw->instanceCount > 0) {
+                    DAWN_TRY(
+                        state.SyncAndRun([&](const VulkanFunctions& vk, VkCommandBuffer commands) {
+                            vk.CmdDraw(commands, draw->vertexCount, draw->instanceCount,
+                                       draw->firstVertex, draw->firstInstance);
+                        }));
+                }
                 break;
             }
 
@@ -1764,10 +1815,13 @@ MaybeError CommandBuffer::RecordRenderPass(CommandRecordingContext* recordingCon
                 workCommandCount++;
                 DrawIndexedCmd* draw = iter->NextCommand<DrawIndexedCmd>();
 
-                DAWN_TRY(state.SyncAndRun([&](const VulkanFunctions& vk, VkCommandBuffer commands) {
-                    vk.CmdDrawIndexed(commands, draw->indexCount, draw->instanceCount,
-                                      draw->firstIndex, draw->baseVertex, draw->firstInstance);
-                }));
+                if (draw->indexCount > 0 && draw->instanceCount > 0) {
+                    DAWN_TRY(state.SyncAndRun([&](const VulkanFunctions& vk,
+                                                  VkCommandBuffer commands) {
+                        vk.CmdDrawIndexed(commands, draw->indexCount, draw->instanceCount,
+                                          draw->firstIndex, draw->baseVertex, draw->firstInstance);
+                    }));
+                }
                 break;
             }
 
@@ -1861,11 +1915,11 @@ MaybeError CommandBuffer::RecordRenderPass(CommandRecordingContext* recordingCon
             case Command::InsertDebugMarker: {
                 if (device->GetGlobalInfo().HasExt(InstanceExt::DebugUtils)) {
                     InsertDebugMarkerCmd* cmd = iter->NextCommand<InsertDebugMarkerCmd>();
-                    const char* label = iter->NextData<char>(cmd->length + 1);
+                    std::string_view label = NextNullTerminatedString(iter, cmd->length);
                     VkDebugUtilsLabelEXT utilsLabel;
                     utilsLabel.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT;
                     utilsLabel.pNext = nullptr;
-                    utilsLabel.pLabelName = label;
+                    utilsLabel.pLabelName = label.data();
                     // Default color to black
                     utilsLabel.color[0] = 0.0;
                     utilsLabel.color[1] = 0.0;
@@ -1891,11 +1945,11 @@ MaybeError CommandBuffer::RecordRenderPass(CommandRecordingContext* recordingCon
             case Command::PushDebugGroup: {
                 if (device->GetGlobalInfo().HasExt(InstanceExt::DebugUtils)) {
                     PushDebugGroupCmd* cmd = iter->NextCommand<PushDebugGroupCmd>();
-                    const char* label = iter->NextData<char>(cmd->length + 1);
+                    std::string_view label = NextNullTerminatedString(iter, cmd->length);
                     VkDebugUtilsLabelEXT utilsLabel;
                     utilsLabel.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT;
                     utilsLabel.pNext = nullptr;
-                    utilsLabel.pLabelName = label;
+                    utilsLabel.pLabelName = label.data();
                     // Default color to black
                     utilsLabel.color[0] = 0.0;
                     utilsLabel.color[1] = 0.0;
@@ -1911,13 +1965,12 @@ MaybeError CommandBuffer::RecordRenderPass(CommandRecordingContext* recordingCon
             case Command::SetBindGroup: {
                 SetBindGroupCmd* cmd = iter->NextCommand<SetBindGroupCmd>();
                 BindGroup* bindGroup = ToBackend(cmd->group.Get());
-                uint32_t* dynamicOffsets = nullptr;
-                if (cmd->dynamicOffsetCount > 0) {
+                ityp::span<BindingIndex, const uint32_t> dynamicOffsets;
+                if (cmd->dynamicOffsetCount != BindingIndex{0u}) {
                     dynamicOffsets = iter->NextData<uint32_t>(cmd->dynamicOffsetCount);
                 }
 
-                state.descriptorSets.OnSetBindGroup(cmd->index, bindGroup, cmd->dynamicOffsetCount,
-                                                    dynamicOffsets);
+                state.descriptorSets.OnSetBindGroup(cmd->index, bindGroup, dynamicOffsets);
                 break;
             }
 
@@ -1949,9 +2002,9 @@ MaybeError CommandBuffer::RecordRenderPass(CommandRecordingContext* recordingCon
             case Command::SetImmediates: {
                 SetImmediatesCmd* cmd = iter->NextCommand<SetImmediatesCmd>();
                 DAWN_ASSERT(cmd->size > 0);
-                uint8_t* value = nullptr;
-                value = iter->NextData<uint8_t>(cmd->size);
-                state.immediates.SetImmediates(cmd->offset, value, cmd->size);
+                Span<const uint8_t> data = iter->NextData<uint8_t>(cmd->size);
+                // TODO(https://crbug.com/532946455): Spanify ImmediateTracker.
+                state.immediates.SetImmediates(cmd->offset, data.data(), data.size());
                 break;
             }
 
@@ -2048,8 +2101,8 @@ MaybeError CommandBuffer::RecordRenderPass(CommandRecordingContext* recordingCon
             case Command::SetScissorRect: {
                 SetScissorRectCmd* cmd = mCommands.NextCommand<SetScissorRectCmd>();
                 VkRect2D rect;
-                rect.offset.x = cmd->x;
-                rect.offset.y = cmd->y;
+                rect.offset.x = sign_cast(cmd->x);
+                rect.offset.y = sign_cast(cmd->y);
                 rect.extent.width = cmd->width;
                 rect.extent.height = cmd->height;
 
@@ -2061,8 +2114,8 @@ MaybeError CommandBuffer::RecordRenderPass(CommandRecordingContext* recordingCon
                 ExecuteBundlesCmd* cmd = mCommands.NextCommand<ExecuteBundlesCmd>();
                 auto bundles = mCommands.NextData<Ref<RenderBundleBase>>(cmd->count);
 
-                for (uint32_t i = 0; i < cmd->count; ++i) {
-                    CommandIterator* iter = DAWN_UNSAFE_TODO(bundles[i])->GetCommands();
+                for (const auto& bundle : bundles) {
+                    CommandIterator* iter = bundle->GetCommands();
                     iter->Reset();
                     while (iter->NextCommandId(&type)) {
                         DAWN_TRY(EncodeRenderBundleCommand(iter, type));

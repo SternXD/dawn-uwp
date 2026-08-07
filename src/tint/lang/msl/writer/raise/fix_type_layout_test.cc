@@ -41,6 +41,11 @@ namespace {
 
 class MslWriter_FixTypeLayoutTest : public core::ir::transform::TransformTest {
   protected:
+    void SetUp() override {
+        mod.properties.Add(core::ir::Property::kAllow16BitFloats,
+                           core::ir::Property::kAllowBufferTypes);
+    }
+
     FixTypeLayoutOptions options;
     void Run() { core::ir::transform::TransformTest::Run(FixTypeLayout, options); }
 };
@@ -4521,7 +4526,7 @@ $B1: {  # root
 }
 
 TEST_F(MslWriter_FixTypeLayoutTest, PointerOffset_Vec3) {
-    capabilities.Add(core::ir::Capability::kAllow8BitIntegers);
+    mod.properties.Add(core::ir::Property::kAllow8BitIntegers);
 
     auto* S = ty.Struct(mod.symbols.New("S"), {
                                                   {mod.symbols.New("a"), ty.vec3u()},

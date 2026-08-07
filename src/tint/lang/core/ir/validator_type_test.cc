@@ -46,7 +46,7 @@
 #include "src/tint/lang/core/type/sampled_texture.h"
 #include "src/tint/lang/core/type/storage_texture.h"
 
-namespace tint::mock {
+namespace tint::hlsl {
 /// A mock non-core type used for testing the non-core type validation rule.
 class NonCoreType final : public Castable<NonCoreType, core::type::Type> {
   public:
@@ -69,9 +69,9 @@ class NonCoreType final : public Castable<NonCoreType, core::type::Type> {
     uint32_t align_;
     bool is_handle_;
 };
-}  // namespace tint::mock
+}  // namespace tint::hlsl
 
-TINT_INSTANTIATE_TYPEINFO(tint::mock::NonCoreType);
+TINT_INSTANTIATE_TYPEINFO(tint::hlsl::NonCoreType);
 
 namespace tint::core::ir {
 
@@ -267,6 +267,23 @@ TEST_F(IR_ValidatorTest, StructMember_Void) {
 )")) << res.Failure();
 }
 
+TEST_F(IR_ValidatorTest, StructMember_Buffer) {
+    auto* str_ty =
+        ty.Struct(mod.symbols.New("MyStruct"), {
+                                                   {mod.symbols.New("v"), ty.buffer(16), {}},
+                                               });
+    auto* v = b.Var(ty.ptr(private_, str_ty));
+    mod.root_block->Append(v);
+
+    auto res = ir::Validate(mod);
+    ASSERT_NE(res, Success);
+    EXPECT_THAT(res.Failure().reason,
+                testing::HasSubstr(R"(:6:3 error: var: struct member 0 cannot have buffer type
+  %1:ptr<private, MyStruct, read_write> = var undef
+  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+)")) << res.Failure();
+}
+
 TEST_F(IR_ValidatorTest, StructMember_AlignZero) {
     core::IOAttributes attrs = {};
     tint::Vector<const core::type::StructMember*, 4> members;
@@ -333,7 +350,7 @@ TEST_F(IR_ValidatorTest, StructMember_TypeAlignZero) {
     core::IOAttributes attrs = {};
     tint::Vector<const core::type::StructMember*, 4> members;
     members.Push(ty.Get<core::type::StructMember>(
-        mod.symbols.New("v"), ty.Get<tint::mock::NonCoreType>(/* align */ 0u), 0u, 0u,
+        mod.symbols.New("v"), ty.Get<tint::hlsl::NonCoreType>(/* align */ 0u), 0u, 0u,
         /* align */ 4u, 4u, std::move(attrs)));
     auto* str_ty = ty.Get<core::type::Struct>(mod.symbols.New("MyStruct"), std::move(members),
                                               tint::RoundUp(0u, 16u));
@@ -356,7 +373,7 @@ TEST_F(IR_ValidatorTest, StructMember_TypeAlignNotPowerOfTwo) {
     core::IOAttributes attrs = {};
     tint::Vector<const core::type::StructMember*, 4> members;
     members.Push(ty.Get<core::type::StructMember>(
-        mod.symbols.New("v"), ty.Get<tint::mock::NonCoreType>(/* align */ 5u), 0u, 0u,
+        mod.symbols.New("v"), ty.Get<tint::hlsl::NonCoreType>(/* align */ 5u), 0u, 0u,
         /* align */ 8u, 8u, std::move(attrs)));
     auto* str_ty = ty.Get<core::type::Struct>(mod.symbols.New("MyStruct"), std::move(members),
                                               tint::RoundUp(0u, 16u));
@@ -482,7 +499,7 @@ TEST_F(IR_ValidatorTest, StructMember_MultipleRuntimeArrays) {
         << res.Failure();
 }
 
-TEST_F(IR_ValidatorTest, StructMember_RowMajor_WithoutCapability) {
+TEST_F(IR_ValidatorTest, StructMember_RowMajor_WithoutProperty) {
     auto* mat_ty = ty.mat2x2<f32>();
     auto* member = ty.Get<core::type::StructMember>(
         mod.symbols.New("m"), mat_ty, 0u, 0u, mat_ty->Align(), mat_ty->Size(), IOAttributes{});
@@ -636,7 +653,7 @@ TEST_F(IR_ValidatorTest, StructMember_Sampler_WithProperty) {
     ASSERT_EQ(res, Success);
 }
 
-TEST_F(IR_ValidatorTest, StructMember_RowMajor_WithCapability) {
+TEST_F(IR_ValidatorTest, StructMember_RowMajor_WithProperty) {
     auto* mat_ty = ty.mat2x2<f32>();
     auto* member = ty.Get<core::type::StructMember>(
         mod.symbols.New("m"), mat_ty, 0u, 0u, mat_ty->Align(), mat_ty->Size(), IOAttributes{});
@@ -652,7 +669,7 @@ TEST_F(IR_ValidatorTest, StructMember_RowMajor_WithCapability) {
     ASSERT_EQ(res, Success) << res.Failure();
 }
 
-TEST_F(IR_ValidatorTest, StructMember_MatrixStride_WithoutCapability) {
+TEST_F(IR_ValidatorTest, StructMember_MatrixStride_WithoutProperty) {
     auto* mat_ty = ty.mat2x2<f32>();
     auto* member = ty.Get<core::type::StructMember>(
         mod.symbols.New("m"), mat_ty, 0u, 0u, mat_ty->Align(), mat_ty->Size(), IOAttributes{});
@@ -673,12 +690,93 @@ TEST_F(IR_ValidatorTest, StructMember_MatrixStride_WithoutCapability) {
 )")) << res.Failure();
 }
 
-TEST_F(IR_ValidatorTest, StructMember_MatrixStride_WithCapability) {
+TEST_F(IR_ValidatorTest, StructMember_MatrixStride_WithProperty) {
     auto* mat_ty = ty.mat2x2<f32>();
     auto* member = ty.Get<core::type::StructMember>(mod.symbols.New("m"), mat_ty, 0u, 0u,
                                                     mat_ty->Align(), 64u, IOAttributes{});
     member->SetMatrixStride(32);
     auto* str_ty = ty.Get<core::type::Struct>(mod.symbols.New("MyStruct"), Vector{member}, 64u);
+
+    auto* v = b.Var(ty.ptr(private_, str_ty));
+    mod.root_block->Append(v);
+
+    mod.properties.Add(Property::kAllowStructMatrixDecorations);
+    auto res = ir::Validate(mod);
+    ASSERT_EQ(res, Success) << res.Failure();
+}
+
+TEST_F(IR_ValidatorTest, StructMember_RowMajor_NonMatrix) {
+    auto* member = ty.Get<core::type::StructMember>(mod.symbols.New("m"), ty.u32(), 0u, 0u, 4u, 4u,
+                                                    IOAttributes{});
+    member->SetRowMajor();
+    auto* str_ty = ty.Get<core::type::Struct>(mod.symbols.New("MyStruct"), Vector{member}, 4u);
+
+    auto* v = b.Var(ty.ptr(private_, str_ty));
+    mod.root_block->Append(v);
+
+    mod.properties.Add(Property::kAllowStructMatrixDecorations);
+    auto res = ir::Validate(mod);
+    ASSERT_NE(res, Success);
+    EXPECT_THAT(res.Failure().reason,
+                testing::HasSubstr(
+                    "RowMajor attribute can only be applied to a matrix or an array of matrices"))
+        << res.Failure();
+}
+
+TEST_F(IR_ValidatorTest, StructMember_MatrixStride_NonMatrix) {
+    auto* member = ty.Get<core::type::StructMember>(mod.symbols.New("m"), ty.u32(), 0u, 0u, 4u, 4u,
+                                                    IOAttributes{});
+    member->SetMatrixStride(32);
+    auto* str_ty = ty.Get<core::type::Struct>(mod.symbols.New("MyStruct"), Vector{member}, 4u);
+
+    auto* v = b.Var(ty.ptr(private_, str_ty));
+    mod.root_block->Append(v);
+
+    mod.properties.Add(Property::kAllowStructMatrixDecorations);
+    auto res = ir::Validate(mod);
+    ASSERT_NE(res, Success);
+    EXPECT_THAT(
+        res.Failure().reason,
+        testing::HasSubstr(
+            "MatrixStride attribute can only be applied to a matrix or an array of matrices"))
+        << res.Failure();
+}
+
+TEST_F(IR_ValidatorTest, StructMember_RowMajor_ArrayOfStruct) {
+    auto* mat_ty = ty.mat2x2<f32>();
+    auto* inner_member = ty.Get<core::type::StructMember>(
+        mod.symbols.New("m"), mat_ty, 0u, 0u, mat_ty->Align(), mat_ty->Size(), IOAttributes{});
+    auto* inner_str =
+        ty.Get<core::type::Struct>(mod.symbols.New("T"), Vector{inner_member}, mat_ty->Size());
+
+    auto* arr = ty.array(inner_str, 2u);
+    auto* member = ty.Get<core::type::StructMember>(mod.symbols.New("t"), arr, 0u, 0u, arr->Align(),
+                                                    arr->Size(), IOAttributes{});
+    member->SetRowMajor();
+
+    auto* str_ty = ty.Get<core::type::Struct>(mod.symbols.New("S"), Vector{member}, arr->Size());
+
+    auto* v = b.Var(ty.ptr(private_, str_ty));
+    mod.root_block->Append(v);
+
+    mod.properties.Add(Property::kAllowStructMatrixDecorations);
+    auto res = ir::Validate(mod);
+    ASSERT_NE(res, Success);
+    EXPECT_THAT(res.Failure().reason,
+                testing::HasSubstr(
+                    "RowMajor attribute can only be applied to a matrix or an array of matrices"))
+        << res.Failure();
+}
+
+TEST_F(IR_ValidatorTest, StructMember_RowMajor_ArrayOfMatrix) {
+    auto* mat_ty = ty.mat2x2<f32>();
+    auto* arr = ty.array(mat_ty, 2u);
+    auto* member = ty.Get<core::type::StructMember>(mod.symbols.New("m"), arr, 0u, 0u, arr->Align(),
+                                                    arr->Size(), IOAttributes{});
+    member->SetRowMajor();
+
+    auto* str_ty =
+        ty.Get<core::type::Struct>(mod.symbols.New("MyStruct"), Vector{member}, arr->Size());
 
     auto* v = b.Var(ty.ptr(private_, str_ty));
     mod.root_block->Append(v);
@@ -738,7 +836,7 @@ TEST_F(IR_ValidatorTest, FunctionParam_InvalidHandlePointer) {
 
 TEST_F(IR_ValidatorTest, NonCoreType) {
     auto* fn = b.Function("my_func", ty.void_());
-    fn->AppendParam(b.FunctionParam(ty.Get<tint::mock::NonCoreType>(/* align*/ 4u)));
+    fn->AppendParam(b.FunctionParam(ty.Get<tint::hlsl::NonCoreType>(/* align*/ 4u)));
     b.Append(fn->Block(), [&] {  //
         b.Return(fn);
     });
@@ -749,11 +847,42 @@ TEST_F(IR_ValidatorTest, NonCoreType) {
         << res.Failure();
 }
 
-using TypeTest = IRTestParamHelper<std::tuple<
-    /* allowed */ bool,
-    /* type_builder */ TypeBuilderFn>>;
+TEST_F(IR_ValidatorTest, BufferDisallowed) {
+    auto* v = b.Var("v", ty.ptr(storage, ty.unsized_buffer()));
+    v->SetBindingPoint(0, 0);
+    mod.root_block->Append(v);
+
+    auto res = ir::Validate(mod);
+    ASSERT_NE(res, Success);
+    EXPECT_THAT(res.Failure().reason,
+                testing::HasSubstr("buffer types are not allowed in this context"));
+}
+
+struct TypeTest : public IRTestParamHelper<std::tuple<
+                      /* allowed */ bool,
+                      /* type_builder */ TypeBuilderFn>> {
+  protected:
+    void SetUp() override { mod.properties.Add(Property::kAllow16BitFloats); }
+};
 
 using Type_ArrayElements = TypeTest;
+
+TEST_F(Type_ArrayElements, Buffer) {
+    auto* buffer = ty.buffer(16);
+    auto* f = b.Function("my_func", ty.void_());
+    b.Append(f->Block(), [&] {
+        b.Var("v", AddressSpace::kFunction, ty.array(buffer, 4));
+        b.Return(f);
+    });
+
+    auto res = ir::Validate(mod);
+    ASSERT_NE(res, Success) << res.Failure();
+    EXPECT_THAT(res.Failure().reason,
+                testing::HasSubstr(R"(:3:5 error: var: array elements, ')" +
+                                   ty.array(buffer, 4)->FriendlyName() +
+                                   R"(', must have creation-fixed footprint)"))
+        << res.Failure();
+}
 
 TEST_P(Type_ArrayElements, Test) {
     bool allowed = std::get<0>(GetParam());
@@ -805,6 +934,38 @@ TEST_F(IR_ValidatorTest, LargeArrays) {
                       {mod.symbols.New("a8"), ty.array<u32, (1ull << 32ull) - 32u>(), {}},
                   });
     mod.root_block->Append(b.Var(ty.ptr<workgroup>(str_ty)));
+    auto res = ir::Validate(mod);
+    ASSERT_EQ(res, Success) << res.Failure();
+}
+
+TEST_F(IR_ValidatorTest, NestedTypes_ExceedLimit) {
+    const core::type::Type* current = ty.u32();
+    for (size_t i = 0; i < 256; ++i) {  // kMaxNestDepthOfCompositeType + 1
+        current = ty.array(current, 1u);
+    }
+    auto* fn = b.Function("my_func", ty.void_());
+    b.Append(fn->Block(), [&] {
+        b.Var("v", function, current);
+        b.Return(fn);
+    });
+
+    auto res = ir::Validate(mod);
+    ASSERT_NE(res, Success);
+    EXPECT_THAT(res.Failure().reason,
+                testing::HasSubstr("type has a nesting depth that exceeds the maximum of 255"));
+}
+
+TEST_F(IR_ValidatorTest, NestedTypes_UnderLimit) {
+    const core::type::Type* current = ty.u32();
+    for (size_t i = 0; i < 255; ++i) {
+        current = ty.array(current, 1u);
+    }
+    auto* fn = b.Function("my_func", ty.void_());
+    b.Append(fn->Block(), [&] {
+        b.Var("v", function, current);
+        b.Return(fn);
+    });
+
     auto res = ir::Validate(mod);
     ASSERT_EQ(res, Success) << res.Failure();
 }
@@ -951,7 +1112,7 @@ TEST_P(Type_SubgroupMatrixComponentType, Test) {
         b.Return(f);
     });
 
-    auto res = ir::Validate(mod, Capabilities{Capability::kAllow8BitIntegers});
+    auto res = ir::Validate(mod);
     if (allowed) {
         ASSERT_EQ(res, Success) << res.Failure();
     } else {
@@ -1085,7 +1246,7 @@ TEST_F(IR_ValidatorTest, BindingArray_AllowedNonSampledTextureWithNonCoreType) {
         auto* var =
             b.Var("m", AddressSpace::kHandle,
                   ty.binding_array(
-                      ty.Get<tint::mock::NonCoreType>(/*align */ 4u, /*is_handle*/ true), 5));
+                      ty.Get<tint::hlsl::NonCoreType>(/*align */ 4u, /*is_handle*/ true), 5));
         var->SetBindingPoint(0, 0);
     });
 
@@ -1497,11 +1658,10 @@ TEST_P(IR_Validator8BitIntTypeTest, Var) {
         b.Return(fn);
     });
 
-    Capabilities caps;
     if (int8_allowed) {
-        caps.Add(Capability::kAllow8BitIntegers);
+        mod.properties.Add(Property::kAllow8BitIntegers);
     }
-    auto res = ir::Validate(mod, caps);
+    auto res = ir::Validate(mod);
     if (int8_allowed) {
         ASSERT_EQ(res, Success) << res.Failure();
     } else {
@@ -1520,11 +1680,10 @@ TEST_P(IR_Validator8BitIntTypeTest, FnParam) {
     fn->SetParams(Vector{b.FunctionParam(type)});
     b.Append(fn->Block(), [&] { b.Return(fn); });
 
-    Capabilities caps;
     if (int8_allowed) {
-        caps.Add(Capability::kAllow8BitIntegers);
+        mod.properties.Add(Property::kAllow8BitIntegers);
     }
-    auto res = ir::Validate(mod, caps);
+    auto res = ir::Validate(mod);
     if (int8_allowed) {
         ASSERT_EQ(res, Success) << res.Failure();
     } else {
@@ -1542,11 +1701,10 @@ TEST_P(IR_Validator8BitIntTypeTest, FnRet) {
     auto* fn = b.Function("my_func", type);
     b.Append(fn->Block(), [&] { b.Unreachable(); });
 
-    Capabilities caps;
     if (int8_allowed) {
-        caps.Add(Capability::kAllow8BitIntegers);
+        mod.properties.Add(Property::kAllow8BitIntegers);
     }
-    auto res = ir::Validate(mod, caps);
+    auto res = ir::Validate(mod);
     if (int8_allowed) {
         ASSERT_EQ(res, Success) << res.Failure();
     } else {
@@ -1574,11 +1732,10 @@ TEST_P(IR_Validator8BitIntTypeTest, BlockParam) {
         b.Unreachable();
     });
 
-    Capabilities caps;
     if (int8_allowed) {
-        caps.Add(Capability::kAllow8BitIntegers);
+        mod.properties.Add(Property::kAllow8BitIntegers);
     }
-    auto res = ir::Validate(mod, caps);
+    auto res = ir::Validate(mod);
     if (int8_allowed) {
         ASSERT_EQ(res, Success) << res.Failure();
     } else {
@@ -1615,14 +1772,61 @@ TEST_F(IR_ValidatorTest, Int8Type_InstructionOperand_NotAllowed) {
 )")) << res.Failure();
 }
 
-TEST_F(IR_ValidatorTest, Int8Type_InstructionOperand_AllowedWithCapability) {
+TEST_F(IR_ValidatorTest, Int8Type_InstructionOperand_NotAllowed_BeforeSubgroupMatrix) {
+    auto* str_ty =
+        ty.Struct(mod.symbols.New("MyStruct"),
+                  {
+                      {mod.symbols.New("u8a"), ty.array(ty.u8(), 4u)},
+                      {mod.symbols.New("u8m"), ty.subgroup_matrix_result(ty.u8(), 8u, 8u)},
+                  });
+
+    auto* fn = b.Function("my_func", ty.void_());
+    b.Append(fn->Block(), [&] {
+        b.Var("v", AddressSpace::kFunction, str_ty);
+        b.Return(fn);
+    });
+
+    auto res = ir::Validate(mod);
+    ASSERT_NE(res, Success);
+    EXPECT_THAT(res.Failure().reason,
+                testing::HasSubstr(R"(:8:5 error: var: 8-bit integer types are not permitted
+    %v:ptr<function, MyStruct, read_write> = var undef
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+)")) << res.Failure();
+}
+
+TEST_F(IR_ValidatorTest, Int8Type_InstructionOperand_NotAllowed_AfterSubgroupMatrix) {
+    auto* str_ty =
+        ty.Struct(mod.symbols.New("MyStruct"),
+                  {
+                      {mod.symbols.New("i8m"), ty.subgroup_matrix_result(ty.i8(), 8u, 8u)},
+                      {mod.symbols.New("i8a"), ty.array(ty.i8(), 4u)},
+                  });
+
+    auto* fn = b.Function("my_func", ty.void_());
+    b.Append(fn->Block(), [&] {
+        b.Var("v", AddressSpace::kFunction, str_ty);
+        b.Return(fn);
+    });
+
+    auto res = ir::Validate(mod);
+    ASSERT_NE(res, Success);
+    EXPECT_THAT(res.Failure().reason,
+                testing::HasSubstr(R"(:8:5 error: var: 8-bit integer types are not permitted
+    %v:ptr<function, MyStruct, read_write> = var undef
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+)")) << res.Failure();
+}
+
+TEST_F(IR_ValidatorTest, Int8Type_InstructionOperand_AllowedWithProperty) {
     auto* fn = b.Function("my_func", ty.void_());
     b.Append(fn->Block(), [&] {
         b.Let("l", u8(1));
         b.Return(fn);
     });
 
-    auto res = ir::Validate(mod, Capabilities{Capability::kAllow8BitIntegers});
+    mod.properties.Add(Property::kAllow8BitIntegers);
+    auto res = ir::Validate(mod);
     ASSERT_EQ(res, Success) << res.Failure();
 }
 
@@ -1640,14 +1844,15 @@ TEST_F(IR_ValidatorTest, Int16Type_NotAllowed) {
         << res.Failure();
 }
 
-TEST_F(IR_ValidatorTest, Int16Type_AllowedWithCapability) {
+TEST_F(IR_ValidatorTest, Int16Type_AllowedWithProperty) {
     auto* fn = b.Function("my_func", ty.void_());
     b.Append(fn->Block(), [&] {
         b.Var("v", function, ty.Get<core::type::U16>());
         b.Return(fn);
     });
 
-    auto res = ir::Validate(mod, Capabilities{Capability::kAllow16BitIntegers});
+    mod.properties.Add(Property::kAllow16BitIntegers);
+    auto res = ir::Validate(mod);
     ASSERT_EQ(res, Success) << res.Failure();
 }
 
@@ -1665,11 +1870,10 @@ TEST_P(IR_Validator64BitIntTypeTest, Var) {
         b.Return(fn);
     });
 
-    Capabilities caps;
     if (int64_allowed) {
-        caps.Add(Capability::kAllow64BitIntegers);
+        mod.properties.Add(Property::kAllow64BitIntegers);
     }
-    auto res = ir::Validate(mod, caps);
+    auto res = ir::Validate(mod);
     if (int64_allowed) {
         ASSERT_EQ(res, Success) << res.Failure();
     } else {
@@ -1688,11 +1892,10 @@ TEST_P(IR_Validator64BitIntTypeTest, FnParam) {
     fn->SetParams(Vector{b.FunctionParam(type)});
     b.Append(fn->Block(), [&] { b.Return(fn); });
 
-    Capabilities caps;
     if (int64_allowed) {
-        caps.Add(Capability::kAllow64BitIntegers);
+        mod.properties.Add(Property::kAllow64BitIntegers);
     }
-    auto res = ir::Validate(mod, caps);
+    auto res = ir::Validate(mod);
     if (int64_allowed) {
         ASSERT_EQ(res, Success) << res.Failure();
     } else {
@@ -1710,11 +1913,10 @@ TEST_P(IR_Validator64BitIntTypeTest, FnRet) {
     auto* fn = b.Function("my_func", type);
     b.Append(fn->Block(), [&] { b.Unreachable(); });
 
-    Capabilities caps;
     if (int64_allowed) {
-        caps.Add(Capability::kAllow64BitIntegers);
+        mod.properties.Add(Property::kAllow64BitIntegers);
     }
-    auto res = ir::Validate(mod, caps);
+    auto res = ir::Validate(mod);
     if (int64_allowed) {
         ASSERT_EQ(res, Success) << res.Failure();
     } else {
@@ -1742,11 +1944,10 @@ TEST_P(IR_Validator64BitIntTypeTest, BlockParam) {
         b.Unreachable();
     });
 
-    Capabilities caps;
     if (int64_allowed) {
-        caps.Add(Capability::kAllow64BitIntegers);
+        mod.properties.Add(Property::kAllow64BitIntegers);
     }
-    auto res = ir::Validate(mod, caps);
+    auto res = ir::Validate(mod);
     if (int64_allowed) {
         ASSERT_EQ(res, Success) << res.Failure();
     } else {
@@ -1782,14 +1983,15 @@ TEST_F(IR_ValidatorTest, Int64Type_InstructionOperand_NotAllowed) {
 )")) << res.Failure();
 }
 
-TEST_F(IR_ValidatorTest, Int64Type_InstructionOperand_AllowedWithCapability) {
+TEST_F(IR_ValidatorTest, Int64Type_InstructionOperand_AllowedWithProperty) {
     auto* fn = b.Function("my_func", ty.void_());
     b.Append(fn->Block(), [&] {
         b.Let("l", u64(1));
         b.Return(fn);
     });
 
-    auto res = ir::Validate(mod, Capabilities{Capability::kAllow64BitIntegers});
+    mod.properties.Add(Property::kAllow64BitIntegers);
+    auto res = ir::Validate(mod);
     ASSERT_EQ(res, Success) << res.Failure();
 }
 
@@ -1882,5 +2084,103 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(AddressSpace::kImmediate,
                         core::Access::kReadWrite,
                         "immediate pointers must be read access")));
+
+using Buffer_AddressSpace = IRTestParamHelper<std::tuple<AddressSpace, const char*>>;
+
+TEST_P(Buffer_AddressSpace, Test) {
+    mod.properties.Add(Property::kAllowBufferTypes);
+    auto aspace = std::get<0>(GetParam());
+    const std::string expected_error = std::get<1>(GetParam());
+    auto* func = b.Function("foo", ty.void_());
+    auto* param = b.FunctionParam("p", ty.ptr(aspace, ty.unsized_buffer()));
+    func->SetParams({param});
+    func->Block()->Append(b.Return(func));
+
+    auto res = ir::Validate(mod);
+    if (expected_error.empty()) {
+        ASSERT_EQ(res, Success);
+    } else {
+        ASSERT_NE(res, Success);
+        EXPECT_THAT(res.Failure().reason, testing::HasSubstr(expected_error));
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    IR_ValidatorTest,
+    Buffer_AddressSpace,
+    testing::Values(
+        std::make_tuple(AddressSpace::kFunction,
+                        "buffer types are not allowed in the 'function' address space"),
+        std::make_tuple(AddressSpace::kPrivate,
+                        "buffer types are not allowed in the 'private' address space"),
+        std::make_tuple(AddressSpace::kHandle,
+                        "the 'handle' address space can only be used for handle types"),
+        std::make_tuple(AddressSpace::kImmediate,
+                        "buffer types are not allowed in the 'immediate' address space"),
+        std::make_tuple(AddressSpace::kStorage, ""),
+        std::make_tuple(AddressSpace::kUniform, ""),
+        std::make_tuple(AddressSpace::kWorkgroup, "")));
+
+using Buffer_SizeRestrictions = IRTestParamHelper<AddressSpace>;
+
+TEST_P(Buffer_SizeRestrictions, FourBytes) {
+    mod.properties.Add(Property::kAllowBufferTypes);
+    auto aspace = GetParam();
+    auto* func = b.Function("foo", ty.void_());
+    auto* param = b.FunctionParam("p", ty.ptr(aspace, ty.buffer(4)));
+    func->SetParams({param});
+    func->Block()->Append(b.Return(func));
+
+    auto res = ir::Validate(mod);
+    ASSERT_EQ(res, Success);
+}
+
+TEST_P(Buffer_SizeRestrictions, ThreeBytes) {
+    mod.properties.Add(Property::kAllowBufferTypes);
+    auto aspace = GetParam();
+    auto* func = b.Function("foo", ty.void_());
+    auto* param = b.FunctionParam("p", ty.ptr(aspace, ty.buffer(3)));
+    func->SetParams({param});
+    func->Block()->Append(b.Return(func));
+
+    auto res = ir::Validate(mod);
+    ASSERT_NE(res, Success);
+    EXPECT_THAT(res.Failure().reason,
+                testing::HasSubstr("buffer size must be evenly divisible by 4"));
+}
+
+TEST_P(Buffer_SizeRestrictions, TwoBytes_NoF16) {
+    mod.properties.Add(Property::kAllowBufferTypes);
+    mod.properties.Remove(Property::kAllow16BitFloats);
+    auto aspace = GetParam();
+    auto* func = b.Function("foo", ty.void_());
+    auto* param = b.FunctionParam("p", ty.ptr(aspace, ty.buffer(2)));
+    func->SetParams({param});
+    func->Block()->Append(b.Return(func));
+
+    auto res = ir::Validate(mod);
+    ASSERT_NE(res, Success);
+    EXPECT_THAT(res.Failure().reason,
+                testing::HasSubstr("buffer size must be evenly divisible by 4"));
+}
+
+TEST_P(Buffer_SizeRestrictions, TwoBytes_F16) {
+    mod.properties.Add(Property::kAllowBufferTypes);
+    mod.properties.Add(Property::kAllow16BitFloats);
+    auto aspace = GetParam();
+    auto* func = b.Function("foo", ty.void_());
+    auto* param = b.FunctionParam("p", ty.ptr(aspace, ty.buffer(2)));
+    func->SetParams({param});
+    func->Block()->Append(b.Return(func));
+
+    auto res = ir::Validate(mod);
+    ASSERT_EQ(res, Success);
+}
+
+INSTANTIATE_TEST_SUITE_P(IR_ValidatorTest,
+                         Buffer_SizeRestrictions,
+                         testing::Values(AddressSpace::kWorkgroup,
+                                         AddressSpace::kStorage,
+                                         AddressSpace::kUniform));
 
 }  // namespace tint::core::ir

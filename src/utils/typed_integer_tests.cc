@@ -26,8 +26,9 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <limits>
+#include <type_traits>
 
-#include "gtest/gtest.h"
+#include "src/utils/gtest.h"
 #include "src/utils/typed_integer.h"
 #include "src/utils/underlying_type.h"
 
@@ -50,6 +51,10 @@ TEST_F(TypedIntegerTest, ConstructionAndCast) {
 
     static_assert(static_cast<int32_t>(Signed(3)) == 3);
     static_assert(static_cast<uint32_t>(Unsigned(28u)) == 28);
+
+    // TypedInteger shouldn't be trivially default constructible, because it is
+    // always initialized (initialization is a "non-trivial" operation).
+    static_assert(!std::is_trivially_default_constructible_v<Unsigned>);
 }
 
 // Test that typed integers can be explicitly cast to other integral types
@@ -358,6 +363,18 @@ TEST_F(TypedIntegerTest, ArithmeticAssignment) {
     }
 }
 
+TEST_F(TypedIntegerTest, PlusOne) {
+    EXPECT_EQ(Unsigned(11u).PlusOne(), Unsigned(12u));
+    EXPECT_EQ(Signed(11).PlusOne(), Signed(12));
+    EXPECT_EQ(Signed(-1).PlusOne(), Signed(0));
+}
+
+TEST_F(TypedIntegerTest, MinusOne) {
+    EXPECT_EQ(Unsigned(11u).MinusOne(), Unsigned(10u));
+    EXPECT_EQ(Signed(11).MinusOne(), Signed(10));
+    EXPECT_EQ(Signed(1).MinusOne(), Signed(0));
+}
+
 TEST_F(TypedIntegerTest, NumericLimits) {
     EXPECT_EQ(std::numeric_limits<Unsigned>::max(), Unsigned(std::numeric_limits<uint32_t>::max()));
     EXPECT_EQ(std::numeric_limits<Unsigned>::min(), Unsigned(std::numeric_limits<uint32_t>::min()));
@@ -385,122 +402,121 @@ using TypedIntegerDeathTest = TypedIntegerTest;
 
 // Tests for bounds assertions on arithmetic overflow and underflow.
 // Note (d)checked_cast tests are in NumericDeathTest.
-#if defined(DAWN_ENABLE_ASSERTS) && GTEST_HAS_DEATH_TEST
 
 TEST_F(TypedIntegerDeathTest, IncrementUnsignedOverflow) {
     Unsigned value(std::numeric_limits<uint32_t>::max() - 1);
 
     value++;                    // Doesn't overflow.
-    EXPECT_DEATH(value++, "");  // Overflows.
+    DAWN_EXPECT_DEBUG_DEATH_IF_SUPPORTED(value++, "");  // Overflows.
 }
 
 TEST_F(TypedIntegerDeathTest, IncrementSignedOverflow) {
     Signed value(std::numeric_limits<int32_t>::max() - 1);
 
     value++;                    // Doesn't overflow.
-    EXPECT_DEATH(value++, "");  // Overflows.
+    DAWN_EXPECT_ASSERT_DEATH_IF_SUPPORTED_ELSE_SKIP_UBSAN(value++, "");  // Overflows.
 }
 
 TEST_F(TypedIntegerDeathTest, DecrementUnsignedUnderflow) {
     Unsigned value(std::numeric_limits<uint32_t>::min() + 1);
 
     value--;                    // Doesn't underflow.
-    EXPECT_DEATH(value--, "");  // Underflows.
+    DAWN_EXPECT_DEBUG_DEATH_IF_SUPPORTED(value--, "");  // Underflows.
 }
 
 TEST_F(TypedIntegerDeathTest, DecrementSignedUnderflow) {
     Signed value(std::numeric_limits<int32_t>::min() + 1);
 
     value--;                    // Doesn't underflow.
-    EXPECT_DEATH(value--, "");  // Underflows.
+    DAWN_EXPECT_ASSERT_DEATH_IF_SUPPORTED_ELSE_SKIP_UBSAN(value--, "");  // Underflows.
 }
 
 TEST_F(TypedIntegerDeathTest, UnsignedAdditionOverflow) {
     Unsigned value(std::numeric_limits<uint32_t>::max() - 1);
 
     value + Unsigned(1u);                     // Doesn't overflow.
-    EXPECT_DEATH(value + Unsigned(2u), "");   // Overflows.
-    EXPECT_DEATH(value += Unsigned(2u), "");  // Overflows.
+    DAWN_EXPECT_DEBUG_DEATH_IF_SUPPORTED(value + Unsigned(2u), "");   // Overflows.
+    DAWN_EXPECT_DEBUG_DEATH_IF_SUPPORTED(value += Unsigned(2u), "");  // Overflows.
 }
 
 TEST_F(TypedIntegerDeathTest, SignedAdditionOverflow) {
     Signed value(std::numeric_limits<int32_t>::max() - 1);
 
     value + Signed(1);                     // Doesn't overflow.
-    EXPECT_DEATH(value + Signed(2), "");   // Overflows.
-    EXPECT_DEATH(value += Signed(2), "");  // Overflows.
+    DAWN_EXPECT_ASSERT_DEATH_IF_SUPPORTED_ELSE_SKIP_UBSAN(value + Signed(2), "");   // Overflows.
+    DAWN_EXPECT_ASSERT_DEATH_IF_SUPPORTED_ELSE_SKIP_UBSAN(value += Signed(2), "");  // Overflows.
 }
 
 TEST_F(TypedIntegerDeathTest, SignedAdditionUnderflow) {
     Signed value(std::numeric_limits<int32_t>::min() + 1);
 
     value + Signed(-1);                     // Doesn't underflow.
-    EXPECT_DEATH(value + Signed(-2), "");   // Underflows.
-    EXPECT_DEATH(value += Signed(-2), "");  // Underflows.
+    DAWN_EXPECT_ASSERT_DEATH_IF_SUPPORTED_ELSE_SKIP_UBSAN(value + Signed(-2), "");   // Underflows.
+    DAWN_EXPECT_ASSERT_DEATH_IF_SUPPORTED_ELSE_SKIP_UBSAN(value += Signed(-2), "");  // Underflows.
 }
 
 TEST_F(TypedIntegerDeathTest, UnsignedSubtractionUnderflow) {
     Unsigned value(1u);
 
     value - Unsigned(1u);                     // Doesn't underflow.
-    EXPECT_DEATH(value - Unsigned(2u), "");   // Underflows.
-    EXPECT_DEATH(value -= Unsigned(2u), "");  // Underflows.
+    DAWN_EXPECT_DEBUG_DEATH_IF_SUPPORTED(value - Unsigned(2u), "");   // Underflows.
+    DAWN_EXPECT_DEBUG_DEATH_IF_SUPPORTED(value -= Unsigned(2u), "");  // Underflows.
 }
 
 TEST_F(TypedIntegerDeathTest, SignedSubtractionOverflow) {
     Signed value(std::numeric_limits<int32_t>::max() - 1);
 
     value - Signed(-1);                     // Doesn't overflow.
-    EXPECT_DEATH(value - Signed(-2), "");   // Overflows.
-    EXPECT_DEATH(value -= Signed(-2), "");  // Overflows.
+    DAWN_EXPECT_ASSERT_DEATH_IF_SUPPORTED_ELSE_SKIP_UBSAN(value - Signed(-2), "");   // Overflows.
+    DAWN_EXPECT_ASSERT_DEATH_IF_SUPPORTED_ELSE_SKIP_UBSAN(value -= Signed(-2), "");  // Overflows.
 }
 
 TEST_F(TypedIntegerDeathTest, SignedSubtractionUnderflow) {
     Signed value(std::numeric_limits<int32_t>::min() + 1);
 
     value - Signed(1);                     // Doesn't underflow.
-    EXPECT_DEATH(value - Signed(2), "");   // Underflows.
-    EXPECT_DEATH(value -= Signed(2), "");  // Underflows.
+    DAWN_EXPECT_ASSERT_DEATH_IF_SUPPORTED_ELSE_SKIP_UBSAN(value - Signed(2), "");   // Underflows.
+    DAWN_EXPECT_ASSERT_DEATH_IF_SUPPORTED_ELSE_SKIP_UBSAN(value -= Signed(2), "");  // Underflows.
 }
 
 TEST_F(TypedIntegerDeathTest, UnsignedMultiplicationOverflow) {
     Unsigned value(std::numeric_limits<uint32_t>::max() / 2);
 
     value* Unsigned(2u);                      // Doesn't overflow.
-    EXPECT_DEATH(value * Unsigned(3u), "");   // Overflows.
-    EXPECT_DEATH(value *= Unsigned(3u), "");  // Overflows.
+    DAWN_EXPECT_DEBUG_DEATH_IF_SUPPORTED(value * Unsigned(3u), "");   // Overflows.
+    DAWN_EXPECT_DEBUG_DEATH_IF_SUPPORTED(value *= Unsigned(3u), "");  // Overflows.
 }
 
 TEST_F(TypedIntegerDeathTest, SignedMultiplicationOverflow) {
     Signed value(std::numeric_limits<int32_t>::max() / 2);
 
     value* Signed(2);                      // Doesn't overflow.
-    EXPECT_DEATH(value * Signed(3), "");   // Overflows.
-    EXPECT_DEATH(value *= Signed(3), "");  // Overflows.
+    DAWN_EXPECT_ASSERT_DEATH_IF_SUPPORTED_ELSE_SKIP_UBSAN(value * Signed(3), "");   // Overflows.
+    DAWN_EXPECT_ASSERT_DEATH_IF_SUPPORTED_ELSE_SKIP_UBSAN(value *= Signed(3), "");  // Overflows.
 }
 
 TEST_F(TypedIntegerDeathTest, SignedMultiplicationUnderflow) {
     Signed value(std::numeric_limits<int32_t>::min() / 2);
 
     value* Signed(2);                      // Doesn't underflow.
-    EXPECT_DEATH(value * Signed(3), "");   // Underflows.
-    EXPECT_DEATH(value *= Signed(3), "");  // Underflows.
+    DAWN_EXPECT_ASSERT_DEATH_IF_SUPPORTED_ELSE_SKIP_UBSAN(value * Signed(3), "");   // Underflows.
+    DAWN_EXPECT_ASSERT_DEATH_IF_SUPPORTED_ELSE_SKIP_UBSAN(value *= Signed(3), "");  // Underflows.
 }
 
 TEST_F(TypedIntegerDeathTest, UnsignedDivisionByZero) {
     Unsigned value(1u);
 
     value / Unsigned(1u);                     // Doesn't underflow.
-    EXPECT_DEATH(value / Unsigned(0u), "");   // DBZ.
-    EXPECT_DEATH(value /= Unsigned(0u), "");  // DBZ.
+    DAWN_EXPECT_ASSERT_DEATH_IF_SUPPORTED_ELSE_SKIP_UBSAN(value / Unsigned(0u), "");   // DBZ.
+    DAWN_EXPECT_ASSERT_DEATH_IF_SUPPORTED_ELSE_SKIP_UBSAN(value /= Unsigned(0u), "");  // DBZ.
 }
 
 TEST_F(TypedIntegerDeathTest, SignedDivisionByZero) {
     Signed value(1);
 
     value / Signed(-1);                    // Doesn't overflow.
-    EXPECT_DEATH(value / Signed(0), "");   // DBZ.
-    EXPECT_DEATH(value /= Signed(0), "");  // DBZ.
+    DAWN_EXPECT_ASSERT_DEATH_IF_SUPPORTED_ELSE_SKIP_UBSAN(value / Signed(0), "");   // DBZ.
+    DAWN_EXPECT_ASSERT_DEATH_IF_SUPPORTED_ELSE_SKIP_UBSAN(value /= Signed(0), "");  // DBZ.
 }
 
 TEST_F(TypedIntegerDeathTest, SignedDivisionOverflow) {
@@ -510,24 +526,24 @@ TEST_F(TypedIntegerDeathTest, SignedDivisionOverflow) {
     Signed value(std::numeric_limits<int32_t>::min());
 
     value / Signed(1);                      // Doesn't overflow.
-    EXPECT_DEATH(value / Signed(-1), "");   // Overflows.
-    EXPECT_DEATH(value /= Signed(-1), "");  // Overflows.
+    DAWN_EXPECT_ASSERT_DEATH_IF_SUPPORTED_ELSE_SKIP_UBSAN(value / Signed(-1), "");   // Overflows.
+    DAWN_EXPECT_ASSERT_DEATH_IF_SUPPORTED_ELSE_SKIP_UBSAN(value /= Signed(-1), "");  // Overflows.
 }
 
 TEST_F(TypedIntegerDeathTest, UnsignedModuloByZero) {
     Unsigned value(1u);
 
     value % Unsigned(1u);                     // Doesn't underflow.
-    EXPECT_DEATH(value % Unsigned(0u), "");   // DBZ.
-    EXPECT_DEATH(value %= Unsigned(0u), "");  // DBZ.
+    DAWN_EXPECT_ASSERT_DEATH_IF_SUPPORTED_ELSE_SKIP_UBSAN(value % Unsigned(0u), "");   // DBZ.
+    DAWN_EXPECT_ASSERT_DEATH_IF_SUPPORTED_ELSE_SKIP_UBSAN(value %= Unsigned(0u), "");  // DBZ.
 }
 
 TEST_F(TypedIntegerDeathTest, SignedModuloByZero) {
     Signed value(1);
 
     value % Signed(-1);                    // Doesn't overflow.
-    EXPECT_DEATH(value % Signed(0), "");   // DBZ.
-    EXPECT_DEATH(value %= Signed(0), "");  // DBZ.
+    DAWN_EXPECT_ASSERT_DEATH_IF_SUPPORTED_ELSE_SKIP_UBSAN(value % Signed(0), "");   // DBZ.
+    DAWN_EXPECT_ASSERT_DEATH_IF_SUPPORTED_ELSE_SKIP_UBSAN(value %= Signed(0), "");  // DBZ.
 }
 
 TEST_F(TypedIntegerDeathTest, SignedModuloOverflow) {
@@ -537,8 +553,8 @@ TEST_F(TypedIntegerDeathTest, SignedModuloOverflow) {
     Signed value(std::numeric_limits<int32_t>::min());
 
     value % Signed(1);                      // Doesn't overflow.
-    EXPECT_DEATH(value % Signed(-1), "");   // Overflows.
-    EXPECT_DEATH(value %= Signed(-1), "");  // Overflows.
+    DAWN_EXPECT_ASSERT_DEATH_IF_SUPPORTED_ELSE_SKIP_UBSAN(value % Signed(-1), "");   // Overflows.
+    DAWN_EXPECT_ASSERT_DEATH_IF_SUPPORTED_ELSE_SKIP_UBSAN(value %= Signed(-1), "");  // Overflows.
 }
 
 TEST_F(TypedIntegerDeathTest, NegationOverflow) {
@@ -546,10 +562,38 @@ TEST_F(TypedIntegerDeathTest, NegationOverflow) {
     -maxValue;  // Doesn't underflow.
 
     Signed minValue(std::numeric_limits<int32_t>::min());
-    EXPECT_DEATH(-minValue, "");  // Overflows.
+    DAWN_EXPECT_ASSERT_DEATH_IF_SUPPORTED_ELSE_SKIP_UBSAN(-minValue, "");  // Overflows.
 }
 
-#endif  // defined(DAWN_ENABLE_ASSERTS) && GTEST_HAS_DEATH_TEST
+TEST_F(TypedIntegerDeathTest, UnsignedPlusOneOverflow) {
+    Unsigned value(std::numeric_limits<uint32_t>::max() - 1);
+
+    value.PlusOne();                              // Doesn't overflow.
+    DAWN_EXPECT_DEBUG_DEATH_IF_SUPPORTED(value.PlusOne().PlusOne(), "");  // Overflows.
+}
+
+TEST_F(TypedIntegerDeathTest, SignedPlusOneOverflow) {
+    Signed value(std::numeric_limits<int32_t>::max() - 1);
+
+    value.PlusOne();                              // Doesn't overflow.
+    DAWN_EXPECT_ASSERT_DEATH_IF_SUPPORTED_ELSE_SKIP_UBSAN(value.PlusOne().PlusOne(),
+                                                          "");  // Overflows.
+}
+
+TEST_F(TypedIntegerDeathTest, UnsignedMinusOneOverflow) {
+    Unsigned value(std::numeric_limits<uint32_t>::lowest() + 1);
+
+    value.MinusOne();                               // Doesn't overflow.
+    DAWN_EXPECT_DEBUG_DEATH_IF_SUPPORTED(value.MinusOne().MinusOne(), "");  // Overflows.
+}
+
+TEST_F(TypedIntegerDeathTest, SignedMinusOneOverflow) {
+    Signed value(std::numeric_limits<int32_t>::lowest() + 1);
+
+    value.MinusOne();                               // Doesn't overflow.
+    DAWN_EXPECT_ASSERT_DEATH_IF_SUPPORTED_ELSE_SKIP_UBSAN(value.MinusOne().MinusOne(),
+                                                          "");  // Overflows.
+}
 
 }  // anonymous namespace
 }  // namespace dawn

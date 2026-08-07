@@ -97,6 +97,7 @@ Contrary to `depot_tools`, this scripts does not figure out option-dependent req
 
 The following packages are needed to build Dawn. (Package names are the Ubuntu names).
 
+* `libfuse2`
 * `libxrandr-dev`
 * `libxinerama-dev`
 * `libxcursor-dev`
@@ -107,7 +108,7 @@ The following packages are needed to build Dawn. (Package names are the Ubuntu n
 * `npm`
 
 ```sh
-sudo apt-get install libxrandr-dev libxinerama-dev libxcursor-dev mesa-common-dev libx11-xcb-dev pkg-config nodejs npm
+sudo apt-get install libfuse2 libxrandr-dev libxinerama-dev libxcursor-dev mesa-common-dev libx11-xcb-dev pkg-config nodejs npm
 ```
 
 Note, `nodejs` and `npm` are only needed if building `dawn.node`.
@@ -162,27 +163,33 @@ Cross-compilation is provided on a best-effort basis, primarily for the purpose
 of compilation checks during local Dawn development. It only supports Clang.
 It may not always work, and the resulting binaries are not guaranteed to work.
 
-1.  Add your target OS to the `target_os` array in `.gclient`. Or, just use
-    `standalone-maximal.gclient`.
+1.  Add your target OS to the `target_os` array in `.gclient`. Or, use
+    `standalone-maximal.gclient` and follow the instructions in it.
+    This will enable downloading toolchains and any target-specific Dawn DEPS.
+    - Windows: ~16GB.
+    - Mac: ~4GB.
+    - Android: ~2.5GB.
 1.  `gclient sync`.
 1.  Create a new `out/*` directory for each target build with the relevant GN
     args. The following configurations have been tested:
 
     - `target_os = "mac"` `target_cpu = "arm64"`/`"x64"` on Linux hosts
     - `target_os = "win"` `target_cpu = "x64"` on Linux and Mac hosts
+        - On Mac hosts, many Windows files can't build using Siso remote builds.
+          Use `autoninja --offline` (or `autoninja -k=0 ; autoninja --offline`
+          to first compile everything possible with Siso, then compile the rest
+          locally). See <https://crbug.com/446124900>.
+    - `target_os = "android` `target_cpu = "arm64"` on Linux hosts (note below)
 
 For background, see also
 [this guide](https://chromium.googlesource.com/chromium/src/+/main/docs/win_cross.md).
 
-There is sometimes an unknown issue with building standard libraries with Siso.
-If this happens, try building locally, using `autoninja --offline`.
-
 #### For Android targets (Linux hosts)
 
-Compiling Dawn binaries for Android is not supported in a Dawn standalone
-checkout; it must be checked out as a submodule of `chromium/src` (on a Linux
-host). If Chromium is configured to build for Android, then Dawn targets (like
-`dawn_unittests` will also be buildable.
+**Cross-compilation for Android as described above works to compile targets, but
+the resulting binaries have not been tested.** If you want to run them you *may*
+need to set up an Android Chromium build (which contains Dawn) and build Dawn
+targets (like `dawn_unittests`, `dawn_end2end_tests`) in the Chromium build.
 
 ### Using ccache for CMake builds
 

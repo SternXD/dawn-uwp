@@ -196,9 +196,7 @@ ResultOrError<InternalPipelineStore::BlitR8ToStencilPipelines> GetOrCreateR8ToSt
     Ref<PipelineLayoutBase> pipelineLayout;
     {
         PipelineLayoutDescriptor plDesc = {};
-        plDesc.bindGroupLayoutCount = 1;
-
-        plDesc.bindGroupLayouts = &bgl;
+        plDesc.bindGroupLayouts = SpanFromRef<BindGroupIndex>(bgl);
         DAWN_TRY_ASSIGN(pipelineLayout, device->CreatePipelineLayout(&plDesc));
     }
 
@@ -309,8 +307,8 @@ MaybeError BlitRG8ToDepth16Unorm(DeviceBase* device,
             bufferDesc.mappedAtCreation = true;
             DAWN_TRY_ASSIGN(paramsBuffer, device->CreateBuffer(&bufferDesc));
 
-            uint32_t* params =
-                static_cast<uint32_t*>(paramsBuffer->GetMappedRange(0, bufferDesc.size));
+            uint32_t* params = static_cast<uint32_t*>(
+                paramsBuffer->GetMappedRange(0, checked_cast<size_t>(bufferDesc.size)));
             params[0] = dchecked_cast<uint32_t>(dst.origin.x);
             DAWN_UNSAFE_TODO(params[1]) = dchecked_cast<uint32_t>(dst.origin.y);
             DAWN_TRY(paramsBuffer->Unmap());
@@ -326,8 +324,7 @@ MaybeError BlitRG8ToDepth16Unorm(DeviceBase* device,
 
             BindGroupDescriptor bgDesc = {};
             bgDesc.layout = bgl.Get();
-            bgDesc.entryCount = bgEntries.size();
-            bgDesc.entries = bgEntries.data();
+            bgDesc.entries = bgEntries;
             DAWN_TRY_ASSIGN(bindGroup, device->CreateBindGroup(&bgDesc));
         }
 
@@ -396,8 +393,7 @@ MaybeError BlitR8ToStencil(DeviceBase* device,
         bglEntries[1].buffer.minBindingSize = 4 * sizeof(uint32_t);
 
         BindGroupLayoutDescriptor bglDesc = {};
-        bglDesc.entryCount = bglEntries.size();
-        bglDesc.entries = bglEntries.data();
+        bglDesc.entries = bglEntries;
 
         DAWN_TRY_ASSIGN(bgl, device->CreateBindGroupLayout(&bglDesc));
     }
@@ -415,7 +411,8 @@ MaybeError BlitR8ToStencil(DeviceBase* device,
         bufferDesc.mappedAtCreation = true;
         DAWN_TRY_ASSIGN(paramsBuffer, device->CreateBuffer(&bufferDesc));
 
-        uint32_t* params = static_cast<uint32_t*>(paramsBuffer->GetMappedRange(0, bufferDesc.size));
+        uint32_t* params = static_cast<uint32_t*>(
+            paramsBuffer->GetMappedRange(0, checked_cast<size_t>(bufferDesc.size)));
         params[0] = dchecked_cast<uint32_t>(dst.origin.x);
         DAWN_UNSAFE_TODO(params[1]) = dchecked_cast<uint32_t>(dst.origin.y);
         DAWN_UNSAFE_TODO(params[2]) = 0;
@@ -438,7 +435,7 @@ MaybeError BlitR8ToStencil(DeviceBase* device,
         if (z >= 1) {
             // Pass the array layer info via the uniform buffer.
             commandEncoder->APIWriteBuffer(paramsBuffer.Get(), sizeof(uint32_t) * 2,
-                                           reinterpret_cast<const uint8_t*>(&z), sizeof(uint32_t));
+                                           ByteSpanFromRef(z));
         }
 
         Ref<TextureViewBase> dstView;
@@ -462,8 +459,7 @@ MaybeError BlitR8ToStencil(DeviceBase* device,
 
             BindGroupDescriptor bgDesc = {};
             bgDesc.layout = bgl.Get();
-            bgDesc.entryCount = bgEntries.size();
-            bgDesc.entries = bgEntries.data();
+            bgDesc.entries = bgEntries;
             DAWN_TRY_ASSIGN(bindGroup,
                             device->CreateBindGroup(&bgDesc, UsageValidationMode::Internal));
         }
@@ -545,7 +541,7 @@ MaybeError BlitStagingBufferToDepth(DeviceBase* device,
     DAWN_TRY_ASSIGN(commandBuffer, commandEncoder->Finish());
 
     CommandBufferBase* commands = commandBuffer.Get();
-    device->GetQueue()->APISubmit(1, &commands);
+    device->GetQueue()->APISubmit(SpanFromRef(commands));
     return {};
 }
 
@@ -609,7 +605,7 @@ MaybeError BlitStagingBufferToStencil(DeviceBase* device,
     DAWN_TRY_ASSIGN(commandBuffer, commandEncoder->Finish());
 
     CommandBufferBase* commands = commandBuffer.Get();
-    device->GetQueue()->APISubmit(1, &commands);
+    device->GetQueue()->APISubmit(SpanFromRef(commands));
     return {};
 }
 

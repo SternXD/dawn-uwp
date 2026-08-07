@@ -56,10 +56,22 @@ namespace tint::core::ir {
 /// The IR validator will reject use of any non-core IR functionality when the module does not
 /// contain the corresponding property.
 enum class Property : uint8_t {
+    /// Allows 8-bit integer types to be used.
+    kAllow8BitIntegers,
+    /// Allows 16-bit integer types to be used.
+    kAllow16BitIntegers,
+    /// Allows 64-bit integer types to be used.
+    kAllow64BitIntegers,
+    /// Allows use of 16-bit floats.
+    kAllow16BitFloats,
     /// Allows input_attachment_index to be associated with any type
     kAllowAnyInputAttachmentIndexType,
     /// Allows lets to have any type.
     kAllowAnyLetType,
+    /// Allows various backend-specific features for ShaderIO, like blend_src on non-struct members.
+    kAllowBackendSpecificShaderIO,
+    /// Allows use of buffer types.
+    kAllowBufferTypes,
     /// Allows ClipDistances on f32 and vecN<f32> parameters
     kAllowClipDistancesOnF32ScalarAndVector,
     /// Allows binding points to be non-unique.
@@ -86,8 +98,12 @@ enum class Property : uint8_t {
     kAllowRefTypes,
     /// Allows matrix annotations on structure members.
     kAllowStructMatrixDecorations,
+    /// Allows module scope `var`s to exist without an IO annotation.
+    kAllowUnannotatedModuleIOVariables,
     /// Allows access instructions to create pointers to vector elements.
     kAllowVectorElementPointer,
+    /// Allows SwizzleView loads, stores, and swizzles.
+    kAllowSwizzleView,
 
     /// Disallow use of the min/max/clamp builtins with vector types.
     kDisallowVectorMinMaxClamp,
@@ -107,8 +123,12 @@ auto& operator<<(STREAM& out, Property p) {
     case Property::k##p: \
         return out << #p
     switch (p) {  //
+        CASE(Allow8BitIntegers);
+        CASE(Allow16BitIntegers);
+        CASE(Allow64BitIntegers);
         CASE(AllowAnyInputAttachmentIndexType);
         CASE(AllowAnyLetType);
+        CASE(AllowBackendSpecificShaderIO);
         CASE(AllowClipDistancesOnF32ScalarAndVector);
         CASE(AllowDuplicateBindings);
         CASE(AllowLocationForNumericComposites);
@@ -122,8 +142,12 @@ auto& operator<<(STREAM& out, Property p) {
         CASE(AllowPointerToHandle);
         CASE(AllowRefTypes);
         CASE(AllowStructMatrixDecorations);
+        CASE(AllowUnannotatedModuleIOVariables);
         CASE(AllowVectorElementPointer);
+        CASE(AllowBufferTypes);
+        CASE(Allow16BitFloats);
         CASE(DisallowVectorMinMaxClamp);
+        CASE(AllowSwizzleView);
     }
 #undef CASE
     return out << "<unknown>";

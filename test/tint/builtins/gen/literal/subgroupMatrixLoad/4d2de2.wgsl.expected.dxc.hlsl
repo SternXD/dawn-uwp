@@ -5,12 +5,12 @@ using Matrix_right_u8_8x8 = Matrix<ComponentType::U8, 8, 8, MatrixUse::B, Matrix
 RWByteAddressBuffer prevent_dce : register(u0);
 ByteAddressBuffer sb_ro : register(t1);
 Matrix_right_u8_8x8 subgroupMatrixLoad_4d2de2() {
-  Matrix_right_u8_8x8 res = Matrix_right_u8_8x8::Load(sb_ro, 1u, 8u, MatrixLayout::RowMajor);
+  Matrix_right_u8_8x8 res = Matrix_right_u8_8x8::Load(sb_ro, 4u, 32u, MatrixLayout::RowMajor);
   return res;
 }
 
 [numthreads(1, 1, 1)]
 void compute_main() {
-  subgroupMatrixLoad_4d2de2().Store(prevent_dce, 0u, 64u, MatrixLayout::RowMajor);
+  subgroupMatrixLoad_4d2de2().Store(prevent_dce, 0u, 8u, MatrixLayout::RowMajor);
 }
 

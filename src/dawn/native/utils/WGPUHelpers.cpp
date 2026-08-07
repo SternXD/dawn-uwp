@@ -76,7 +76,7 @@ ResultOrError<Ref<BufferBase>> CreateBufferFromData(DeviceBase* device,
                                                     std::string_view label,
                                                     wgpu::BufferUsage usage,
                                                     const void* data,
-                                                    uint64_t size) {
+                                                    size_t size) {
     BufferDescriptor descriptor;
     descriptor.label = label;
     descriptor.size = size;
@@ -93,9 +93,7 @@ ResultOrError<Ref<PipelineLayoutBase>> MakeBasicPipelineLayout(
     DeviceBase* device,
     const Ref<BindGroupLayoutBase>& bindGroupLayout) {
     PipelineLayoutDescriptor descriptor;
-    descriptor.bindGroupLayoutCount = 1;
-    BindGroupLayoutBase* bgl = bindGroupLayout.Get();
-    descriptor.bindGroupLayouts = &bgl;
+    descriptor.bindGroupLayouts = SpanFromRef<BindGroupIndex>(bindGroupLayout.Get());
     return device->CreatePipelineLayout(&descriptor);
 }
 
@@ -109,8 +107,7 @@ ResultOrError<Ref<BindGroupLayoutBase>> MakeBindGroupLayout(
     }
 
     BindGroupLayoutDescriptor descriptor;
-    descriptor.entryCount = entries.size();
-    descriptor.entries = entries.data();
+    descriptor.entries = entries;
     return device->CreateBindGroupLayout(&descriptor, allowInternalBinding);
 }
 
@@ -217,8 +214,7 @@ ResultOrError<Ref<BindGroupBase>> MakeBindGroup(
 
     BindGroupDescriptor descriptor;
     descriptor.layout = layout.Get();
-    descriptor.entryCount = entries.size();
-    descriptor.entries = entries.data();
+    descriptor.entries = entries;
 
     return device->CreateBindGroup(&descriptor, mode);
 }

@@ -1013,7 +1013,8 @@ TEST_F(IR_ValidatorTest, Convert_4xU8ToU32) {
         b.Return(f);
     });
 
-    auto res = ir::Validate(mod, Capabilities{Capability::kAllow8BitIntegers});
+    mod.properties.Add(Property::kAllow8BitIntegers);
+    auto res = ir::Validate(mod);
     ASSERT_NE(res, Success);
     EXPECT_THAT(
         res.Failure().reason,
@@ -1032,7 +1033,8 @@ TEST_F(IR_ValidatorTest, Convert_U32To4xU8) {
         b.Return(f);
     });
 
-    auto res = ir::Validate(mod, Capabilities{Capability::kAllow8BitIntegers});
+    mod.properties.Add(Property::kAllow8BitIntegers);
+    auto res = ir::Validate(mod);
     ASSERT_NE(res, Success);
     EXPECT_THAT(
         res.Failure().reason,
@@ -1808,7 +1810,7 @@ TEST_F(IR_ValidatorTest, Scoping_UseBeforeDecl_InControlFlow) {
 )")) << res.Failure();
 }
 
-TEST_F(IR_ValidatorTest, OverrideWithoutCapability) {
+TEST_F(IR_ValidatorTest, OverrideWithoutProperty) {
     b.Append(mod.root_block, [&] { b.Override("a", 1_u); });
 
     auto res = ir::Validate(mod);
@@ -1855,7 +1857,7 @@ TEST_F(IR_ValidatorTest, InstructionInRootBlockWithoutOverrideCap) {
 )")) << res.Failure();
 }
 
-TEST_F(IR_ValidatorTest, OverrideWithCapability) {
+TEST_F(IR_ValidatorTest, OverrideWithProperty) {
     mod.properties.Add(Property::kAllowOverrides);
 
     b.Append(mod.root_block, [&] {
@@ -2083,6 +2085,21 @@ TEST_F(IR_ValidatorTest, ValueArrayCount_NotInRootBlock) {
     ASSERT_NE(res, Success);
     EXPECT_THAT(res.Failure().reason,
                 testing::HasSubstr("ValueArrayCount must be a module-scoped override expression"))
+        << res.Failure();
+}
+
+TEST_F(IR_ValidatorTest, ValueArrayCount_NullValue) {
+    mod.properties.Add(Property::kAllowOverrides);
+
+    b.Append(mod.root_block, [&] {
+        auto* cnt = ty.Get<core::ir::type::ValueArrayCount>(nullptr);
+        auto* a1 = ty.Get<core::type::Array>(ty.i32(), cnt, 4u);
+        b.Var("a", ty.ptr(workgroup, a1, core::Access::kReadWrite));
+    });
+
+    auto res = ir::Validate(mod);
+    ASSERT_NE(res, Success);
+    EXPECT_THAT(res.Failure().reason, testing::HasSubstr("ValueArrayCount value is undefined"))
         << res.Failure();
 }
 

@@ -195,15 +195,116 @@ TEST_F(ProgramToIRSwizzleAssignmentTest, CompoundAssignment_ChainedSwizzle) {
   $B1: {
     %v:ptr<function, vec4<f32>, read_write> = var undef
     %3:vec4<f32> = load %v
-    %4:vec2<f32> = swizzle %3, zx
-    %5:vec2<f32> = add %4, vec2<f32>(1.0f, 2.0f)
-    %6:vec4<f32> = load %v
-    %7:f32 = access %5, 0u
-    %8:f32 = access %5, 1u
+    %4:vec3<f32> = swizzle %3, zyx
+    %5:vec2<f32> = swizzle %4, xz
+    %6:vec2<f32> = add %5, vec2<f32>(1.0f, 2.0f)
+    %7:vec4<f32> = load %v
+    %8:f32 = access %6, 0u
     %9:f32 = access %6, 1u
-    %10:f32 = access %6, 3u
-    %11:vec4<f32> = construct %8, %9, %7, %10
-    store %v, %11
+    %10:f32 = access %7, 1u
+    %11:f32 = access %7, 3u
+    %12:vec4<f32> = construct %9, %10, %8, %11
+    store %v, %12
+    ret
+  }
+}
+)");
+}
+
+TEST_F(ProgramToIRSwizzleAssignmentTest, Assignment_SwizzleIndexedConstant) {
+    // var v : vec4<f32>;
+    // v.xyz[2] = 1.0;
+    auto* v = Var("v", ty.vec4<f32>(), core::AddressSpace::kFunction);
+    auto* assign = Assign(IndexAccessor(MemberAccessor(v, "xyz"), 2_i), 1_f);
+    WrapInFunction(v, assign);
+
+    auto m = Build();
+    ASSERT_EQ(m, Success);
+
+    EXPECT_EQ(Dis(m.Get()), R"(%test_function = @compute @workgroup_size(1u, 1u, 1u) func():void {
+  $B1: {
+    %v:ptr<function, vec4<f32>, read_write> = var undef
+    store_vector_element %v, 2u, 1.0f
+    ret
+  }
+}
+)");
+}
+
+TEST_F(ProgramToIRSwizzleAssignmentTest, Assignment_SwizzleIndexedDynamic) {
+    // var v : vec4<f32>;
+    // var i : i32;
+    // v.zyx[i] = 1.0;
+    auto* v = Var("v", ty.vec4<f32>(), core::AddressSpace::kFunction);
+    auto* i = Var("i", ty.i32(), core::AddressSpace::kFunction);
+    auto* assign = Assign(IndexAccessor(MemberAccessor(v, "zyx"), "i"), 1_f);
+    WrapInFunction(v, i, assign);
+
+    auto m = Build();
+    ASSERT_EQ(m, Success);
+
+    EXPECT_EQ(Dis(m.Get()), R"(%test_function = @compute @workgroup_size(1u, 1u, 1u) func():void {
+  $B1: {
+    %v:ptr<function, vec4<f32>, read_write> = var undef
+    %i:ptr<function, i32, read_write> = var undef
+    %4:i32 = load %i
+    %5:u32 = access array<u32, 3>(2u, 1u, 0u), %4
+    store_vector_element %v, %5, 1.0f
+    ret
+  }
+}
+)");
+}
+
+TEST_F(ProgramToIRSwizzleAssignmentTest, CompoundAssignment_SwizzleIndexedConstant) {
+    // var v : vec4<f32>;
+    // v.xyz[0] += 1.0;
+    auto* v = Var("v", ty.vec4<f32>(), core::AddressSpace::kFunction);
+    auto* assign =
+        CompoundAssign(IndexAccessor(MemberAccessor(v, "xyz"), 0_i), 1_f, core::BinaryOp::kAdd);
+    WrapInFunction(v, assign);
+
+    auto m = Build();
+    ASSERT_EQ(m, Success);
+
+    EXPECT_EQ(Dis(m.Get()), R"(%test_function = @compute @workgroup_size(1u, 1u, 1u) func():void {
+  $B1: {
+    %v:ptr<function, vec4<f32>, read_write> = var undef
+    %3:vec4<f32> = load %v
+    %4:vec3<f32> = swizzle %3, xyz
+    %5:f32 = access %4, 0i
+    %6:f32 = add %5, 1.0f
+    store_vector_element %v, 0u, %6
+    ret
+  }
+}
+)");
+}
+
+TEST_F(ProgramToIRSwizzleAssignmentTest, CompoundAssignment_SwizzleIndexedDynamic) {
+    // var v : vec4<f32>;
+    // var i : i32;
+    // v.xyz[i] += 1.0;
+    auto* v = Var("v", ty.vec4<f32>(), core::AddressSpace::kFunction);
+    auto* i = Var("i", ty.i32(), core::AddressSpace::kFunction);
+    auto* assign =
+        CompoundAssign(IndexAccessor(MemberAccessor(v, "xyz"), "i"), 1_f, core::BinaryOp::kAdd);
+    WrapInFunction(v, i, assign);
+
+    auto m = Build();
+    ASSERT_EQ(m, Success);
+
+    EXPECT_EQ(Dis(m.Get()), R"(%test_function = @compute @workgroup_size(1u, 1u, 1u) func():void {
+  $B1: {
+    %v:ptr<function, vec4<f32>, read_write> = var undef
+    %i:ptr<function, i32, read_write> = var undef
+    %4:i32 = load %i
+    %5:vec4<f32> = load %v
+    %6:vec3<f32> = swizzle %5, xyz
+    %7:f32 = access %6, %4
+    %8:f32 = add %7, 1.0f
+    %9:u32 = access array<u32, 3>(0u, 1u, 2u), %4
+    store_vector_element %v, %9, %8
     ret
   }
 }

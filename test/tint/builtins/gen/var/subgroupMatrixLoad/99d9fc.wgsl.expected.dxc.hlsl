@@ -8,17 +8,14 @@ Matrix_right_u8_8x8 subgroupMatrixLoad_99d9fc() {
   uint arg_1 = 1u;
   uint arg_2 = 8u;
   uint v = arg_1;
-  uint v_1 = max(arg_2, 8u);
-  Matrix_right_u8_8x8 v_2 = Matrix_right_u8_8x8::Splat(0u);
-  if ((((v + (v_1 * 7u)) + 8u) <= 4096u)) {
-    v_2 = Matrix_right_u8_8x8::Load(sb_ro, (0u + (v * 1u)), (v_1 * 1u), MatrixLayout::ColMajor);
-  }
-  Matrix_right_u8_8x8 res = v_2;
+  uint v_1 = max(arg_2, 2u);
+  bool v_2 = (((v + (v_1 * 7u)) + 2u) <= 1024u);
+  Matrix_right_u8_8x8 res = Matrix_right_u8_8x8::Load(sb_ro, (0u + (select(v_2, v, 0u) * 4u)), (select(v_2, v_1, 2u) * 4u), MatrixLayout::ColMajor);
   return res;
 }
 
 [numthreads(1, 1, 1)]
 void compute_main() {
-  subgroupMatrixLoad_99d9fc().Store(prevent_dce, 0u, 64u, MatrixLayout::RowMajor);
+  subgroupMatrixLoad_99d9fc().Store(prevent_dce, 0u, 8u, MatrixLayout::RowMajor);
 }
 

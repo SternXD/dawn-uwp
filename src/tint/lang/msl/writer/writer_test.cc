@@ -26,6 +26,7 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "gmock/gmock.h"
+#include "src/tint/lang/core/type/sampled_texture.h"
 #include "src/tint/lang/core/type/struct.h"
 #include "src/tint/lang/msl/validate/validate.h"
 #include "src/tint/lang/msl/writer/helper_test.h"
@@ -203,7 +204,7 @@ struct tint_array {
 };
 
 struct tint_immediate_data_struct {
-  tint_array<uint4, 1> tint_storage_buffer_sizes;
+  tint_array<uint, 1> tint_storage_buffer_sizes;
 };
 
 struct tint_module_vars_struct {
@@ -256,7 +257,7 @@ struct tint_array {
 
 struct tint_immediate_data_struct {
   /* 0x0000 */ tint_array<int8_t, 64> tint_pad;
-  /* 0x0040 */ tint_array<uint4, 1> tint_storage_buffer_sizes;
+  /* 0x0040 */ tint_array<uint, 1> tint_storage_buffer_sizes;
 };
 
 struct tint_module_vars_struct {
@@ -271,10 +272,68 @@ struct tint_array_lengths_struct {
 [[max_total_threads_per_threadgroup(1)]]
 kernel void entry(device tint_array<uint, 1>* a [[buffer(0)]], const constant tint_immediate_data_struct* tint_immediate_data [[buffer(30)]]) {
   tint_module_vars_struct const tint_module_vars = tint_module_vars_struct{.a=a, .tint_immediate_data=tint_immediate_data};
-  (*tint_module_vars.a)[0u] = tint_array_lengths_struct{.tint_array_length_0_0=((*tint_module_vars.tint_immediate_data).tint_storage_buffer_sizes[0u].x / 4u)}.tint_array_length_0_0;
+  (*tint_module_vars.a)[0u] = tint_array_lengths_struct{.tint_array_length_0_0=((*tint_module_vars.tint_immediate_data).tint_storage_buffer_sizes[0u] / 4u)}.tint_array_length_0_0;
 }
 )");
     EXPECT_TRUE(output_.needs_storage_buffer_sizes);
+}
+
+TEST_F(MslWriterTest, ImmediateF16) {
+    auto* v = b.Var<immediate, f16, core::Access::kRead>("v");
+    mod.root_block->Append(v);
+
+    auto* func = b.ComputeFunction("entry");
+    b.Append(func->Block(), [&] {
+        b.Let("a", b.Load(v));
+        b.Return(func);
+    });
+
+    Options options;
+    options.immediate_binding_point = tint::BindingPoint{0, 30};
+    auto result = Generate(options);
+    ASSERT_EQ(result, Success) << result.Failure() << output_.msl;
+    EXPECT_EQ(output_.msl, R"(#include <metal_stdlib>
+using namespace metal;
+
+struct tint_module_vars_struct {
+  const constant half* v;
+};
+
+[[max_total_threads_per_threadgroup(1)]]
+kernel void entry(const constant half* v [[buffer(30)]]) {
+  tint_module_vars_struct const tint_module_vars = tint_module_vars_struct{.v=v};
+  half const a = (*tint_module_vars.v);
+}
+)");
+}
+
+TEST_F(MslWriterTest, ImmediateVec3F16) {
+    auto* v = b.Var<immediate, vec3<f16>, core::Access::kRead>("v");
+    mod.root_block->Append(v);
+
+    auto* func = b.ComputeFunction("entry");
+    b.Append(func->Block(), [&] {
+        b.Let("a", b.Load(v));
+        b.Return(func);
+    });
+
+    Options options;
+    options.immediate_binding_point = tint::BindingPoint{0, 30};
+    auto result = Generate(options);
+    ASSERT_EQ(result, Success) << result.Failure() << output_.msl;
+    EXPECT_EQ(output_.msl, R"(#include <metal_stdlib>
+using namespace metal;
+
+struct tint_module_vars_struct {
+  const constant packed_half3* v;
+};
+
+[[max_total_threads_per_threadgroup(1)]]
+kernel void entry(const constant packed_half3* v [[buffer(30)]]) {
+  tint_module_vars_struct const tint_module_vars = tint_module_vars_struct{.v=v};
+  half3 const a = half3((*tint_module_vars.v));
+}
+)");
 }
 
 TEST_F(MslWriterTest, StripAllNames) {
@@ -423,7 +482,7 @@ struct tint_array {
 
 struct tint_immediate_data_struct {
   /* 0x0000 */ tint_array<int8_t, 64> tint_pad;
-  /* 0x0040 */ tint_array<uint4, 1> tint_storage_buffer_sizes;
+  /* 0x0040 */ tint_array<uint, 1> tint_storage_buffer_sizes;
 };
 
 struct tint_module_vars_struct {
@@ -440,7 +499,7 @@ struct entry_outputs {
 };
 
 float4 entry_inner(uint tint_vertex_index, tint_module_vars_struct tint_module_vars) {
-  return float4(as_type<float>((*tint_module_vars.tint_vertex_buffer_0)[min(tint_vertex_index, (tint_array_lengths_struct{.tint_array_length_0_1=((*tint_module_vars.tint_immediate_data).tint_storage_buffer_sizes[0u].x / 4u)}.tint_array_length_0_1 - 1u))]), 0.0f, 0.0f, 1.0f);
+  return float4(as_type<float>((*tint_module_vars.tint_vertex_buffer_0)[min(tint_vertex_index, (tint_array_lengths_struct{.tint_array_length_0_1=((*tint_module_vars.tint_immediate_data).tint_storage_buffer_sizes[0u] / 4u)}.tint_array_length_0_1 - 1u))]), 0.0f, 0.0f, 1.0f);
 }
 
 vertex entry_outputs entry(uint tint_vertex_index [[vertex_id]], const device tint_array<uint, 1>* tint_vertex_buffer_0 [[buffer(1)]], const constant tint_immediate_data_struct* tint_immediate_data [[buffer(30)]]) {
@@ -471,7 +530,35 @@ TEST_F(MslWriterTest, CanGenerate_TexelBufferUnsupported) {
                 testing::HasSubstr("texel buffers are not supported by the MSL backend"));
 }
 
+TEST_F(MslWriterTest, CanGenerate_DynamicOffsetOnNonBufferType) {
+    auto* tex_ty = ty.sampled_texture(core::type::TextureDimension::k2d, ty.f32());
+    auto* var = b.Var("tex", ty.ptr<handle>(tex_ty));
+    var->SetBindingPoint(2, 0);
+    mod.root_block->Append(var);
+
+    auto* ep = b.ComputeFunction("entry");
+    b.Append(ep->Block(), [&] {
+        b.Let("x", var);
+        b.Return(ep);
+    });
+
+    Options options;
+    options.entry_point_name = "entry";
+
+    ArgumentBufferInfo abi;
+    abi.id = 0;
+    abi.binding_info_to_offset_index.emplace(0, 0);
+    options.group_to_argument_buffer_info.emplace(2, abi);
+
+    auto result = Generate(options);
+    ASSERT_NE(result, Success);
+    EXPECT_THAT(result.Failure().reason,
+                testing::HasSubstr(
+                    "dynamic offset supplied for a non-buffer type inside an argument buffer"));
+}
+
 TEST_F(MslWriterTest, AtomicStoreMax_Supported) {
+    mod.properties.Add(core::ir::Property::kAllow64BitIntegers);
     auto* sb =
         ty.Struct(mod.symbols.New("SB"), {
                                              {mod.symbols.Register("a"), ty.atomic(ty.u64())},
@@ -512,6 +599,7 @@ kernel void v(device SB* sb [[buffer(0)]]) {
 }
 
 TEST_F(MslWriterTest, AtomicStoreMin_Supported) {
+    mod.properties.Add(core::ir::Property::kAllow64BitIntegers);
     auto* sb =
         ty.Struct(mod.symbols.New("SB"), {
                                              {mod.symbols.Register("a"), ty.atomic(ty.u64())},
@@ -573,6 +661,7 @@ TEST_F(MslWriterTest, CanGenerate_StructMemberPadding_TooLarge) {
 }
 
 TEST_F(MslWriterTest, BufferView_Workgroup) {
+    mod.properties.Add(core::ir::Property::kAllowBufferTypes);
     auto* v = b.Var("v", ty.ptr(workgroup, ty.buffer(32)));
     mod.root_block->Append(v);
 
@@ -638,6 +727,7 @@ kernel void entry(uint tint_local_index [[thread_index_in_threadgroup]], threadg
 }
 
 TEST_F(MslWriterTest, BufferView_HostStruct_SubFunction) {
+    mod.properties.Add(core::ir::Property::kAllowBufferTypes);
     Vector<const core::type::StructMember*, 8> members{
         ty.Get<core::type::StructMember>(mod.symbols.New("a"), ty.u32(), 0u, 0u, 4u, 4u,
                                          core::IOAttributes{}),

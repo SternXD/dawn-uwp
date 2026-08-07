@@ -986,7 +986,7 @@ TEST_P(BufferMappedAtCreationTests, NonMappableUsageSmall) {
 
 // Test mappedAtCreation for a large MapWrite buffer
 TEST_P(BufferMappedAtCreationTests, MapWriteUsageLarge) {
-    constexpr uint64_t kDataSize = 1000 * 1000;
+    constexpr uint64_t kDataSize = 1000ULL * 1000;
     std::vector<uint32_t> myData;
     for (uint32_t i = 0; i < kDataSize; ++i) {
         myData.push_back(i);
@@ -1004,7 +1004,7 @@ TEST_P(BufferMappedAtCreationTests, MapReadUsageLarge) {
     // TODO(crbug.com/473894293): [Capture] buffer mapping: investigate.
     DAWN_SUPPRESS_TEST_IF(IsCaptureReplayCheckingEnabled());
 
-    constexpr uint64_t kDataSize = 1000 * 1000;
+    constexpr uint64_t kDataSize = 1000ULL * 1000;
     std::vector<uint32_t> myData;
     for (uint32_t i = 0; i < kDataSize; ++i) {
         myData.push_back(i);
@@ -1021,7 +1021,7 @@ TEST_P(BufferMappedAtCreationTests, MapReadUsageLarge) {
 
 // Test mappedAtCreation for a large non-mappable buffer
 TEST_P(BufferMappedAtCreationTests, NonMappableUsageLarge) {
-    constexpr uint64_t kDataSize = 1000 * 1000;
+    constexpr uint64_t kDataSize = 1000ULL * 1000;
     std::vector<uint32_t> myData;
     for (uint32_t i = 0; i < kDataSize; ++i) {
         myData.push_back(i);
@@ -1187,6 +1187,8 @@ TEST_P(BufferTests, ZeroSizedBuffer) {
 
 // Test that creating a very large buffers fails gracefully.
 TEST_P(BufferTests, CreateBufferOOM) {
+    DAWN_TEST_UNSUPPORTED_IF(HasToggleEnabled("skip_validation"));
+
     // TODO(http://crbug.com/dawn/749): Missing support.
     DAWN_TEST_UNSUPPORTED_IF(IsOpenGL());
     DAWN_TEST_UNSUPPORTED_IF(IsAsan());
@@ -1229,6 +1231,8 @@ TEST_P(BufferTests, CreateBufferOOMWithValidationError) {
 
 // Test that a very large buffer mappedAtCreation fails gracefully.
 TEST_P(BufferTests, BufferMappedAtCreationOOM) {
+    DAWN_TEST_UNSUPPORTED_IF(HasToggleEnabled("skip_validation"));
+
     // TODO(http://crbug.com/dawn/749): Missing support.
     DAWN_TEST_UNSUPPORTED_IF(IsOpenGL());
     DAWN_TEST_UNSUPPORTED_IF(IsAsan());
@@ -1384,6 +1388,8 @@ TEST_P(BufferTests, CreateErrorBuffer) {
 
 // Test that mapping an OOM buffer fails gracefully
 TEST_P(BufferTests, CreateBufferOOMMapAsync) {
+    DAWN_TEST_UNSUPPORTED_IF(HasToggleEnabled("skip_validation"));
+
     // TODO(http://crbug.com/dawn/749): Missing support.
     DAWN_TEST_UNSUPPORTED_IF(IsOpenGL());
     DAWN_TEST_UNSUPPORTED_IF(IsAsan());

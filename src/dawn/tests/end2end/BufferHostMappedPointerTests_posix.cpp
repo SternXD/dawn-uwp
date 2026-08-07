@@ -62,10 +62,10 @@ class MMapBackend : public BufferHostMappedPointerTestBackend {
         // Write the initial data.
         std::vector<char> initialData(size);
         Populate(initialData.data());
-        EXPECT_EQ(write(fd, initialData.data(), size), (signed)size);
+        EXPECT_EQ(write(fd, initialData.data(), size), static_cast<ssize_t>(size));
 
         // Memory map the file.
-        void* ptr = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+        void* ptr = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
 
         auto UnmapMemory = [=]() {
             munmap(ptr, size);
@@ -88,9 +88,8 @@ class MMapBackend : public BufferHostMappedPointerTestBackend {
         if (dawn::native::CheckIsErrorForTesting(buffer.Get())) {
             UnmapMemory();
         } else {
-            mDisposeCallback.Use([&](auto callback) {
-                EXPECT_CALL(*callback, Call(ptr)).WillOnce(testing::InvokeWithoutArgs(UnmapMemory));
-            });
+            mDisposeCallback.Use(
+                [&](auto callback) { EXPECT_CALL(*callback, Call(ptr)).WillOnce(UnmapMemory); });
         }
 
         return std::make_pair(std::move(buffer), hostMappedDesc.pointer);

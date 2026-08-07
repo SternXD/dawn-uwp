@@ -25,6 +25,7 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+#include <array>
 #include <memory>
 
 #include "dawn/wire/WireClient.h"
@@ -36,7 +37,6 @@ namespace dawn::wire {
 namespace {
 
 using testing::_;
-using testing::InvokeWithoutArgs;
 using testing::Return;
 
 using WireShaderModuleTestBase = WireFutureTest<wgpu::CompilationInfoCallback<void>*>;
@@ -83,12 +83,11 @@ DAWN_INSTANTIATE_WIRE_FUTURE_TEST_P(WireShaderModuleTests);
 TEST_P(WireShaderModuleTests, GetCompilationInfo) {
     GetCompilationInfo();
 
-    EXPECT_CALL(api, OnShaderModuleGetCompilationInfo(apiShaderModule, _))
-        .WillOnce(InvokeWithoutArgs([&] {
-            api.CallShaderModuleGetCompilationInfoCallback(
-                apiShaderModule, WGPUCompilationInfoRequestStatus_Success,
-                reinterpret_cast<const WGPUCompilationInfo*>(&mCompilationInfo));
-        }));
+    EXPECT_CALL(api, OnShaderModuleGetCompilationInfo(apiShaderModule, _)).WillOnce([&] {
+        api.CallShaderModuleGetCompilationInfoCallback(
+            apiShaderModule, WGPUCompilationInfoRequestStatus_Success,
+            reinterpret_cast<const WGPUCompilationInfo*>(&mCompilationInfo));
+    });
     FlushClient();
     FlushFutures();
 
@@ -130,17 +129,126 @@ TEST_P(WireShaderModuleTests, GetCompilationInfo) {
     });
 }
 
+TEST_P(WireShaderModuleTests, GetCompilationInfoMixedUseOfDawnCompilationMessages) {
+    // Verify bookkeeping for the DawnCompilationMessageUtf16 instances.
+    // An earlier version of the feature code was incorrectly indexing the
+    // utf16 vector. It assumed the utf16 chained message for the i'th message
+    // would appear in the i'th slot on the utf16 vector. Construct a case where
+    // that is not true.
+    wgpu::DawnCompilationMessageUtf16 utf16 = {{nullptr, 30, 32, 34}};
+    wgpu::CompilationMessage message0 = {
+        .nextInChain = nullptr, .lineNum = 0, .linePos = 0, .offset = 0, .length = 0};
+    wgpu::CompilationMessage message1 = {
+        .nextInChain = &utf16, .lineNum = 0, .linePos = 0, .offset = 0, .length = 0};
+    std::array<wgpu::CompilationMessage, 2> messages = {message0, message1};
+    wgpu::CompilationInfo compilationInfo = {nullptr, 2, messages.data()};
+
+    GetCompilationInfo();
+
+    EXPECT_CALL(api, OnShaderModuleGetCompilationInfo(apiShaderModule, _)).WillOnce([&] {
+        api.CallShaderModuleGetCompilationInfoCallback(
+            apiShaderModule, WGPUCompilationInfoRequestStatus_Success,
+            reinterpret_cast<const WGPUCompilationInfo*>(&compilationInfo));
+    });
+    FlushClient();
+    FlushFutures();
+
+    ExpectWireCallbacksWhen([&](auto& mockCb) {
+        EXPECT_CALL(
+            mockCb,
+            Call(wgpu::CompilationInfoRequestStatus::Success,
+                 MatchesLambda([&](const wgpu::CompilationInfo* info) -> bool {
+                     if (info->messageCount != compilationInfo.messageCount) {
+                         return false;
+                     }
+                     const wgpu::CompilationMessage* msg0 = &info->messages[0];
+                     EXPECT_EQ(msg0->nextInChain, nullptr);
+
+                     // SAFETY: index into std::array 'messages' with 2 elements.
+                     const wgpu::CompilationMessage* msg1 = DAWN_UNSAFE_BUFFERS(&info->messages[1]);
+                     EXPECT_NE(msg1->nextInChain, nullptr);
+                     EXPECT_EQ(msg1->nextInChain->sType, wgpu::SType::DawnCompilationMessageUtf16);
+                     const auto* utf16_1 =
+                         reinterpret_cast<const wgpu::DawnCompilationMessageUtf16*>(
+                             msg1->nextInChain);
+
+                     // The client should always be copying the data returned from
+                     // the server so the memory addresses should never be equal.
+                     EXPECT_NE(utf16_1, &utf16);
+
+                     return utf16_1->linePos == utf16.linePos && utf16_1->offset == utf16.offset &&
+                            utf16_1->length == utf16.length;
+                 })))
+            .Times(1);
+
+        FlushCallbacks();
+    });
+}
+
+TEST_P(WireShaderModuleTests, GetCompilationInfoDuplicateDawnMessageStructIsDropped) {
+    // Setup a message that has two DawnCompilationMessageUtf16 structs chained to it
+    // This is invalid. The implementation drops the second one.
+    // crbug.com/523731236
+    wgpu::DawnCompilationMessageUtf16 secondUtf16 = {{nullptr, 30, 32, 34}};
+    wgpu::DawnCompilationMessageUtf16 firstUtf16 = {{&secondUtf16, 20, 22, 24}};
+    wgpu::CompilationMessage message = {
+        .nextInChain = &firstUtf16, .lineNum = 0, .linePos = 0, .offset = 0, .length = 0};
+    wgpu::CompilationInfo compilationInfo = {nullptr, 1, &message};
+
+    GetCompilationInfo();
+
+    EXPECT_CALL(api, OnShaderModuleGetCompilationInfo(apiShaderModule, _)).WillOnce([&] {
+        api.CallShaderModuleGetCompilationInfoCallback(
+            apiShaderModule, WGPUCompilationInfoRequestStatus_Success,
+            reinterpret_cast<const WGPUCompilationInfo*>(&compilationInfo));
+    });
+    FlushClient();
+    FlushFutures();
+
+    ExpectWireCallbacksWhen([&](auto& mockCb) {
+        EXPECT_CALL(mockCb, Call(wgpu::CompilationInfoRequestStatus::Success,
+                                 MatchesLambda([&](const wgpu::CompilationInfo* info) -> bool {
+                                     if (info->messageCount != compilationInfo.messageCount) {
+                                         return false;
+                                     }
+                                     const wgpu::CompilationMessage* infoMessage =
+                                         &info->messages[0];
+                                     EXPECT_NE(infoMessage->message.length, WGPU_STRLEN);
+                                     EXPECT_NE(infoMessage->nextInChain, nullptr);
+                                     EXPECT_EQ(infoMessage->nextInChain->sType,
+                                               wgpu::SType::DawnCompilationMessageUtf16);
+                                     const auto* utf16 =
+                                         reinterpret_cast<const wgpu::DawnCompilationMessageUtf16*>(
+                                             infoMessage->nextInChain);
+
+                                     // The client should always be copying the data returned from
+                                     // the server so the memory addresses should never be equal.
+                                     EXPECT_NE(utf16, &firstUtf16);
+                                     EXPECT_NE(utf16, &secondUtf16);
+                                     // The chain ends after the first struct.
+                                     EXPECT_EQ(utf16->nextInChain, nullptr)
+                                         << " " << &firstUtf16 << " " << &secondUtf16;
+
+                                     return utf16->linePos == firstUtf16.linePos &&
+                                            utf16->offset == firstUtf16.offset &&
+                                            utf16->length == firstUtf16.length;
+                                 })))
+            .Times(1);
+
+        FlushCallbacks();
+    });
+}
+
 // Test that calling GetCompilationInfo then disconnecting the wire calls the callback with
 // instance dropped.
 TEST_P(WireShaderModuleTests, GetCompilationInfoBeforeDisconnect) {
     GetCompilationInfo();
 
-    EXPECT_CALL(api, OnShaderModuleGetCompilationInfo(apiShaderModule, _))
-        .WillOnce(InvokeWithoutArgs([&] {
-            api.CallShaderModuleGetCompilationInfoCallback(
-                apiShaderModule, WGPUCompilationInfoRequestStatus_Success,
-                reinterpret_cast<const WGPUCompilationInfo*>(&mCompilationInfo));
-        }));
+    EXPECT_CALL(api, OnShaderModuleGetCompilationInfo(apiShaderModule, _)).WillOnce([&] {
+        api.CallShaderModuleGetCompilationInfoCallback(
+            apiShaderModule, WGPUCompilationInfoRequestStatus_Success,
+            reinterpret_cast<const WGPUCompilationInfo*>(&mCompilationInfo));
+    });
     FlushClient();
     FlushFutures();
 
@@ -171,12 +279,11 @@ TEST_P(WireShaderModuleTests, GetCompilationInfoInsideCallbackBeforeDisconnect) 
 
     GetCompilationInfo();
 
-    EXPECT_CALL(api, OnShaderModuleGetCompilationInfo(apiShaderModule, _))
-        .WillOnce(InvokeWithoutArgs([&] {
-            api.CallShaderModuleGetCompilationInfoCallback(
-                apiShaderModule, WGPUCompilationInfoRequestStatus_Success,
-                reinterpret_cast<const WGPUCompilationInfo*>(&mCompilationInfo));
-        }));
+    EXPECT_CALL(api, OnShaderModuleGetCompilationInfo(apiShaderModule, _)).WillOnce([&] {
+        api.CallShaderModuleGetCompilationInfoCallback(
+            apiShaderModule, WGPUCompilationInfoRequestStatus_Success,
+            reinterpret_cast<const WGPUCompilationInfo*>(&mCompilationInfo));
+    });
     FlushClient();
     FlushFutures();
 
@@ -200,12 +307,11 @@ TEST_P(WireShaderModuleTests, GetCompilationInfoInsideCallbackBeforeDestruction)
 
     GetCompilationInfo();
 
-    EXPECT_CALL(api, OnShaderModuleGetCompilationInfo(apiShaderModule, _))
-        .WillOnce(InvokeWithoutArgs([&] {
-            api.CallShaderModuleGetCompilationInfoCallback(
-                apiShaderModule, WGPUCompilationInfoRequestStatus_Success,
-                reinterpret_cast<const WGPUCompilationInfo*>(&mCompilationInfo));
-        }));
+    EXPECT_CALL(api, OnShaderModuleGetCompilationInfo(apiShaderModule, _)).WillOnce([&] {
+        api.CallShaderModuleGetCompilationInfoCallback(
+            apiShaderModule, WGPUCompilationInfoRequestStatus_Success,
+            reinterpret_cast<const WGPUCompilationInfo*>(&mCompilationInfo));
+    });
     FlushClient();
     FlushFutures();
 

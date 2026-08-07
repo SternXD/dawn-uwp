@@ -122,9 +122,6 @@ ResultOrError<Ref<RenderPipelineBase>> GetOrCreateColorBlitPipeline(
                                        device, fsCode.c_str(),
                                        {tint::wgsl::Extension::kChromiumInternalInputAttachments}));
 
-    FragmentState fragmentState = {};
-    fragmentState.module = fshaderModule.Get();
-
     // Color target states.
     PerColorAttachment<ColorTargetState> colorTargets = {};
     PerColorAttachment<wgpu::ColorTargetStateExpandResolveTextureDawn> msaaExpandResolveStates{};
@@ -145,8 +142,9 @@ ResultOrError<Ref<RenderPipelineBase>> GetOrCreateColorBlitPipeline(
         }
     }
 
-    fragmentState.targetCount = colorAttachmentCount;
-    fragmentState.targets = colorTargets.data();
+    FragmentState fragmentState = {};
+    fragmentState.module = fshaderModule.Get();
+    fragmentState.targets = colorTargets;
 
     RenderPipelineDescriptor renderPipelineDesc = {};
     renderPipelineDesc.label = "blit_color_to_color";
@@ -254,8 +252,7 @@ MaybeError BeginRenderPassAndExpandResolveTextureWithDraw(Device* device,
 
     BindGroupDescriptor bgDesc = {};
     bgDesc.layout = bgl.Get();
-    bgDesc.entryCount = bgEntries.size();
-    bgDesc.entries = bgEntries.data();
+    bgDesc.entries = bgEntries;
     DAWN_TRY_ASSIGN(bindGroup, device->CreateBindGroup(&bgDesc, UsageValidationMode::Internal));
     BindGroup* bindGroupVk = ToBackend(bindGroup.Get());
 

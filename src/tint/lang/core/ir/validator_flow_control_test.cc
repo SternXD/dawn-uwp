@@ -269,6 +269,64 @@ TEST_F(IR_ValidatorTest, If_EmptyFalse) {
     ASSERT_EQ(res, Success) << res.Failure();
 }
 
+TEST_F(IR_ValidatorTest, ConstExprIf_EmptyFalse) {
+    auto* if_ = b.ConstExprIf(true);
+    if_->True()->Append(b.ExitIf(if_, true));
+
+    auto* r1 = b.InstructionResult(ty.bool_());
+    if_->SetResults(Vector{r1});
+
+    auto* f = b.Function("my_func", ty.void_());
+    auto sb = b.Append(f->Block());
+    sb.Append(if_);
+    sb.Return(f);
+
+    auto res = ir::Validate(mod);
+    ASSERT_NE(res, Success);
+    EXPECT_THAT(res.Failure().reason,
+                testing::HasSubstr("error: constexpr_if: constexpr_if must have a false block"));
+}
+
+TEST_F(IR_ValidatorTest, ConstExprIf_MultipleResults) {
+    auto* if_ = b.ConstExprIf(true);
+    if_->True()->Append(b.ExitIf(if_, true, false));
+    if_->False()->Append(b.ExitIf(if_, true, false));
+
+    auto* r1 = b.InstructionResult(ty.bool_());
+    auto* r2 = b.InstructionResult(ty.bool_());
+    if_->SetResults(Vector{r1, r2});
+
+    auto* f = b.Function("my_func", ty.void_());
+    auto sb = b.Append(f->Block());
+    sb.Append(if_);
+    sb.Return(f);
+
+    auto res = ir::Validate(mod);
+    ASSERT_NE(res, Success);
+    EXPECT_THAT(
+        res.Failure().reason,
+        testing::HasSubstr("error: constexpr_if: constexpr_if must have exactly one result"));
+}
+
+TEST_F(IR_ValidatorTest, ConstExprIf_InvalidResultType) {
+    auto* if_ = b.ConstExprIf(true);
+    if_->True()->Append(b.ExitIf(if_, 1_i));
+    if_->False()->Append(b.ExitIf(if_, 2_i));
+
+    auto* r1 = b.InstructionResult(ty.i32());
+    if_->SetResults(Vector{r1});
+
+    auto* f = b.Function("my_func", ty.void_());
+    auto sb = b.Append(f->Block());
+    sb.Append(if_);
+    sb.Return(f);
+
+    auto res = ir::Validate(mod);
+    ASSERT_NE(res, Success);
+    EXPECT_THAT(res.Failure().reason,
+                testing::HasSubstr("error: constexpr_if: constexpr_if result type must be 'bool'"));
+}
+
 TEST_F(IR_ValidatorTest, If_TrueMultiInBlock) {
     auto* f = b.Function("my_func", ty.void_());
 
@@ -2562,6 +2620,27 @@ TEST_F(IR_ValidatorTest, Switch_CaseSelectorTypeMismatchesConditionType) {
     EXPECT_THAT(res.Failure().reason,
                 testing::HasSubstr("error: switch: case selector type 'i32' must match the switch "
                                    "condition type 'u32'"));
+}
+
+TEST_F(IR_ValidatorTest, Loop_ContinuingWithoutContinue) {
+    auto* f = b.Function("f", ty.void_());
+    auto* loop = b.Loop();
+    loop->Body()->Append(b.Let("let", b.Constant(u32(1u))));
+    loop->Body()->Append(b.Return(f));
+    b.Append(loop->Continuing(), [&] {
+        auto* add = b.Add(1_u, 1_u);
+        add->Result()->SetType(ty.bool_());
+        b.NextIteration(loop);
+    });
+    f->Block()->Append(loop);
+    f->Block()->Append(b.Return(f));
+
+    auto res = ir::Validate(mod);
+    ASSERT_NE(res, Success);
+    EXPECT_THAT(
+        res.Failure().reason,
+        testing::HasSubstr(
+            R"(error: binary: result value type 'bool' does not match '+' result type 'u32')"));
 }
 
 }  // namespace tint::core::ir

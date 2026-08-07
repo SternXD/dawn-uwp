@@ -43,6 +43,7 @@
 #include "src/dawn/native/vulkan/UtilsVulkan.h"
 #include "src/dawn/native/vulkan/VulkanError.h"
 #include "src/dawn/platform/metrics/HistogramMacros.h"
+#include "src/utils/numeric.h"
 
 namespace dawn::native::vulkan {
 
@@ -144,6 +145,8 @@ VkFormat VulkanVertexFormat(wgpu::VertexFormat format) {
             return VK_FORMAT_A2B10G10R10_UNORM_PACK32;
         case wgpu::VertexFormat::Unorm8x4BGRA:
             return VK_FORMAT_B8G8R8A8_UNORM;
+        case wgpu::VertexFormat::Snorm10_10_10_2:
+            return VK_FORMAT_A2B10G10R10_SNORM_PACK32;
         default:
             DAWN_UNREACHABLE();
     }
@@ -346,9 +349,11 @@ uint16_t PackStencilOpState(VkStencilOpState state, VkBool32 enabled) {
     DAWN_ASSERT(static_cast<uint32_t>(state.passOp) < 8);
     DAWN_ASSERT(static_cast<uint32_t>(state.depthFailOp) < 8);
     DAWN_ASSERT(static_cast<uint32_t>(state.compareOp) < 8);
-    uint16_t packed = state.failOp | state.passOp << 3 | state.depthFailOp << 6 |
-                      state.compareOp << 9 |
-                      (enabled ? 0x8000 : 0);  // Set high bit if stencil is enabled.
+    uint16_t packed = static_cast<uint16_t>(
+        static_cast<uint32_t>(state.failOp) | static_cast<uint32_t>(state.passOp) << 3u |
+        static_cast<uint32_t>(state.depthFailOp) << 6u |
+        static_cast<uint32_t>(state.compareOp) << 9u |
+        (enabled ? 0x8000u : 0u));  // Set high bit if stencil is enabled.
     return packed;
 }
 
@@ -605,7 +610,7 @@ ResultOrError<RenderPipeline::SpecializationResult> RenderPipeline::InitializeSp
     rasterization.cullMode = VulkanCullMode(GetCullMode());
     rasterization.frontFace = VulkanFrontFace(GetFrontFace());
     rasterization.depthBiasEnable = IsDepthBiasEnabled() ? VK_TRUE : VK_FALSE;
-    rasterization.depthBiasConstantFactor = GetDepthBias();
+    rasterization.depthBiasConstantFactor = static_cast<float>(GetDepthBias());
     rasterization.depthBiasClamp = GetDepthBiasClamp();
     rasterization.depthBiasSlopeFactor = GetDepthBiasSlopeScale();
     rasterization.lineWidth = 1.0f;
@@ -721,14 +726,14 @@ ResultOrError<RenderPipeline::SpecializationResult> RenderPipeline::InitializeSp
 
         dynamicStates.push_back(VK_DYNAMIC_STATE_STENCIL_OP_EXT);
         mDynamicState.packedFrontStencil =
-            PackStencilOpState(depthStencilState.front, depthStencilState.stencilTestEnable);
+            PackStencilOpState(depthStencilState.front, mDynamicState.stencilTestEnable);
         depthStencilState.front.failOp = VK_STENCIL_OP_KEEP;
         depthStencilState.front.passOp = VK_STENCIL_OP_KEEP;
         depthStencilState.front.depthFailOp = VK_STENCIL_OP_KEEP;
         depthStencilState.front.compareOp = VK_COMPARE_OP_NEVER;
 
         mDynamicState.packedBackStencil =
-            PackStencilOpState(depthStencilState.back, depthStencilState.stencilTestEnable);
+            PackStencilOpState(depthStencilState.back, mDynamicState.stencilTestEnable);
         depthStencilState.back.failOp = VK_STENCIL_OP_KEEP;
         depthStencilState.back.passOp = VK_STENCIL_OP_KEEP;
         depthStencilState.back.depthFailOp = VK_STENCIL_OP_KEEP;
@@ -739,7 +744,7 @@ ResultOrError<RenderPipeline::SpecializationResult> RenderPipeline::InitializeSp
     dynamic.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
     dynamic.pNext = nullptr;
     dynamic.flags = 0;
-    dynamic.dynamicStateCount = dynamicStates.size();
+    dynamic.dynamicStateCount = checked_cast<uint32_t>(dynamicStates.size());
     dynamic.pDynamicStates = dynamicStates.data();
 
     // The create info chains in a bunch of things created on the stack here or inside state
@@ -976,7 +981,7 @@ VkPipelineVertexInputStateCreateInfo RenderPipeline::ComputeVertexInputDesc(
 
         VkVertexInputBindingDescription* bindingDesc = &tempAllocations->bindings[bindingCount];
         bindingDesc->binding = static_cast<uint8_t>(slot);
-        bindingDesc->stride = bindingInfo.arrayStride;
+        bindingDesc->stride = checked_cast<uint32_t>(bindingInfo.arrayStride);
         bindingDesc->inputRate = VulkanInputRate(bindingInfo.stepMode);
 
         bindingCount++;
@@ -992,7 +997,7 @@ VkPipelineVertexInputStateCreateInfo RenderPipeline::ComputeVertexInputDesc(
         attributeDesc->location = static_cast<uint8_t>(loc);
         attributeDesc->binding = static_cast<uint8_t>(attributeInfo.vertexBufferSlot);
         attributeDesc->format = VulkanVertexFormat(attributeInfo.format);
-        attributeDesc->offset = attributeInfo.offset;
+        attributeDesc->offset = checked_cast<uint32_t>(attributeInfo.offset);
 
         attributeCount++;
     }

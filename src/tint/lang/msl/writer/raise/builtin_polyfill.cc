@@ -583,6 +583,7 @@ struct State {
     /// @param builtin the builtin call instruction
     void Pack2x16Float(core::ir::CoreBuiltinCall* builtin) {
         // Replace the call with `as_type<uint>(half2(value))`.
+        ir.properties.Add(core::ir::Property::kAllow16BitFloats);
         b.InsertBefore(builtin, [&] {
             auto* convert = b.Convert<vec2<f16>>(builtin->Args()[0]);
             auto* bitcast = b.Bitcast(ty.u32(), convert);
@@ -597,6 +598,7 @@ struct State {
         auto* arg = builtin->Args()[0];
 
         // Convert the argument to f16 and then back again.
+        ir.properties.Add(core::ir::Property::kAllow16BitFloats);
         b.InsertBefore(builtin, [&] {
             b.ConvertWithResult(builtin->DetachResult(),
                                 b.Convert(ty.MatchWidth(ty.f16(), arg->Type()), arg));
@@ -1052,6 +1054,7 @@ struct State {
     /// @param builtin the builtin call instruction
     void Unpack2x16Float(core::ir::CoreBuiltinCall* builtin) {
         // Replace the call with `float2(as_type<half2>(value))`.
+        ir.properties.Add(core::ir::Property::kAllow16BitFloats);
         b.InsertBefore(builtin, [&] {
             auto* bitcast = b.Bitcast<vec2<f16>>(builtin->Args()[0]);
             b.ConvertWithResult(builtin->DetachResult(), bitcast);
@@ -1107,7 +1110,8 @@ struct State {
             const bool majorness_template = builtin->ExplicitTemplateParams().Length() == 2;
             auto* p = builtin->Args()[0];
             auto* offset = builtin->Args()[1];
-            auto* stride = builtin->Args()[majorness_template ? 2 : 3];
+            auto* stride =
+                b.InsertBitcastIfNeeded(ty.u32(), builtin->Args()[majorness_template ? 2 : 3]);
 
             core::ir::Value* col_major = nullptr;
             if (majorness_template) {
@@ -1131,6 +1135,7 @@ struct State {
             auto* matrix_origin = b.Zero<vec2<u64>>();
 
             // Convert the u32 stride to the ulong that MSL expects.
+            ir.properties.Add(core::ir::Property::kAllow64BitIntegers);
             auto* elements_per_row =
                 b.Call<msl::ir::BuiltinCall>(ty.u64(), msl::BuiltinFn::kConvert, stride);
 
@@ -1156,7 +1161,8 @@ struct State {
             auto* p = builtin->Args()[0];
             auto* offset = builtin->Args()[1];
             auto* value = builtin->Args()[2];
-            auto* stride = builtin->Args()[majorness_template ? 3 : 4];
+            auto* stride =
+                b.InsertBitcastIfNeeded(ty.u32(), builtin->Args()[majorness_template ? 3 : 4]);
 
             core::ir::Value* col_major = nullptr;
             if (majorness_template) {
@@ -1177,6 +1183,7 @@ struct State {
             auto* dst = b.Access(elem_ptr, p, offset);
 
             // Convert the u32 stride to the ulong that MSL expects.
+            ir.properties.Add(core::ir::Property::kAllow64BitIntegers);
             auto* elements_per_row =
                 b.Call<msl::ir::BuiltinCall>(ty.u64(), msl::BuiltinFn::kConvert, stride);
 
@@ -1422,11 +1429,7 @@ struct State {
 }  // namespace
 
 Result<SuccessType> BuiltinPolyfill(core::ir::Module& ir, const BuiltinPolyfillConfig& config) {
-    AssertValid(ir,
-                core::ir::Capabilities{
-                    core::ir::Capability::kAllow8BitIntegers,
-                },
-                "before msl.BuiltinPolyfill");
+    AssertValid(ir, "before msl.BuiltinPolyfill");
 
     State{ir, config}.Process();
 

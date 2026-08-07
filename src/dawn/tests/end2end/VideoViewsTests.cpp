@@ -48,11 +48,6 @@ VideoViewsTestBackend::PlatformTexture::~PlatformTexture() = default;
 
 VideoViewsTestBackend::~VideoViewsTestBackend() = default;
 
-constexpr std::array<utils::RGBA8, 3> VideoViewsTestsBase::kYellowYUVAColor;
-constexpr std::array<utils::RGBA8, 3> VideoViewsTestsBase::kWhiteYUVAColor;
-constexpr std::array<utils::RGBA8, 3> VideoViewsTestsBase::kBlueYUVAColor;
-constexpr std::array<utils::RGBA8, 3> VideoViewsTestsBase::kRedYUVAColor;
-
 void VideoViewsTestsBase::SetUp() {
     DawnTestWithParams<Params>::SetUp();
     DAWN_TEST_UNSUPPORTED_IF(UsesWire());
@@ -408,9 +403,9 @@ std::vector<T> VideoViewsTestsBase::GetTestTextureDataWithPlaneIndex(wgpu::Textu
     std::vector<T> texelData =
         VideoViewsTestsBase::GetTestTextureData<T>(format, isCheckerboard, hasAlpha);
     auto subsampleFactor = utils::GetMultiPlaneTextureSubsamplingFactor(format, planeIndex);
-    uint32_t texelDataWidth = kYUVAImageDataWidthInTexels / subsampleFactor.horizontalFactor *
-                              utils::GetMultiPlaneTextureBytesPerElement(format, planeIndex) /
-                              sizeof(T);
+    uint32_t texelDataWidth =
+        static_cast<size_t>(kYUVAImageDataWidthInTexels) / subsampleFactor.horizontalFactor *
+        utils::GetMultiPlaneTextureBytesPerElement(format, planeIndex) / sizeof(T);
     uint32_t texelDataHeight = kYUVAImageDataHeightInTexels / subsampleFactor.verticalFactor;
 
     size_t rowPitch = bytesPerRow / sizeof(T);
@@ -1846,7 +1841,8 @@ class VideoViewsRenderTargetTests : public VideoViewsValidationTests {
             wgpu::Texture planeTexture = device.CreateTexture(&planeTextureDesc);
 
             // Copy plane (Y/UV/A) data to the plane source texture.
-            size_t bytesPerRow = kYUVAImageDataWidthInTexels / subsampleFactor.horizontalFactor *
+            size_t bytesPerRow = static_cast<size_t>(kYUVAImageDataWidthInTexels) /
+                                 subsampleFactor.horizontalFactor *
                                  utils::GetMultiPlaneTextureBytesPerElement(format, planeIndex);
             std::vector<T> planeSrcData = VideoViewsTestsBase::GetTestTextureDataWithPlaneIndex<T>(
                 format, planeIndex, bytesPerRow,
@@ -2288,9 +2284,10 @@ class VideoViewsExtendedUsagesTests : public VideoViewsTestsBase {
             for (size_t plane = 0; plane < numPlanes; ++plane) {
                 auto subsampleFactor = utils::GetMultiPlaneTextureSubsamplingFactor(format, plane);
 
-                size_t bytesPerRow = VideoViewsTestsBase::kYUVAImageDataWidthInTexels /
-                                     subsampleFactor.horizontalFactor *
-                                     utils::GetMultiPlaneTextureBytesPerElement(format, plane);
+                size_t bytesPerRow =
+                    static_cast<size_t>(VideoViewsTestsBase::kYUVAImageDataWidthInTexels) /
+                    subsampleFactor.horizontalFactor *
+                    utils::GetMultiPlaneTextureBytesPerElement(format, plane);
 
                 bytesPerRow = Align(bytesPerRow, 256);
 

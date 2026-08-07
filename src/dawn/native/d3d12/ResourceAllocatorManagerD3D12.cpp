@@ -229,7 +229,7 @@ uint64_t ComputeExtraArraySizeForIntelGen12(uint32_t width,
     }
     uint32_t tileWidth = kTileSize / tileHeight;
 
-    uint64_t layerxSamples = arrayLayerCount * sampleCount;
+    uint64_t layerxSamples = static_cast<uint64_t>(arrayLayerCount) * sampleCount;
 
     if (layerxSamples <= 1) {
         return 0;
@@ -237,7 +237,7 @@ uint64_t ComputeExtraArraySizeForIntelGen12(uint32_t width,
 
     uint32_t columnPitch = GetColumnPitch(height, mipLevelCount);
 
-    uint64_t totalWidth = width * colorFormatBytesPerBlock;
+    uint64_t totalWidth = static_cast<uint64_t>(width) * colorFormatBytesPerBlock;
     uint64_t totalHeight = columnPitch * layerxSamples;
 
     // Texture should be aligned on both tile width (512 bytes) and tile height (128 rows) on Intel
@@ -370,14 +370,14 @@ ResultOrError<ResourceHeapAllocation> ResourceAllocatorManager::AllocateMemory(
         uint64_t depthOrArraySize =
             revisedDescriptor.DepthOrArraySize +
             ComputeExtraArraySizeForIntelGen12(
-                resourceDescriptor.Width, resourceDescriptor.Height,
+                static_cast<uint32_t>(resourceDescriptor.Width), resourceDescriptor.Height,
                 resourceDescriptor.DepthOrArraySize, resourceDescriptor.MipLevels,
                 resourceDescriptor.SampleDesc.Count, colorFormatBytesPerBlock);
         if (depthOrArraySize >= std::numeric_limits<UINT16>::max()) {
             return DAWN_OUT_OF_MEMORY_ERROR(
                 "Texture array size with Intel Gen12 workaround exceeds UINT16");
         }
-        revisedDescriptor.DepthOrArraySize = depthOrArraySize;
+        revisedDescriptor.DepthOrArraySize = checked_cast<UINT16>(depthOrArraySize);
     }
 
     // TODO(crbug.com/dawn/849): Conditionally disable sub-allocation.

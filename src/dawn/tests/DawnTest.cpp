@@ -58,6 +58,10 @@
 #include <versionhelpers.h>
 #endif
 
+#if DAWN_PLATFORM_IS(ANDROID)
+#include <android/api-level.h>
+#endif
+
 #include "dawn/dawn_proc.h"
 #include "dawn/wire/WireClient.h"
 #include "dawn/wire/WireServer.h"
@@ -1033,14 +1037,14 @@ DawnTestBase::DawnTestBase(const AdapterTestParam& param) : mParam(param) {
                 WGPUAdapterInfo info = {};
                 native::GetProcs().adapterGetInfo(candidate.Get(), &info);
 
-                const auto& param = gCurrentTest->mParam;
-                bool result = (param.adapterProperties.selected &&
-                               info.deviceID == param.adapterProperties.deviceID &&
-                               info.vendorID == param.adapterProperties.vendorID &&
+                const auto& testParam = gCurrentTest->mParam;
+                bool result = (testParam.adapterProperties.selected &&
+                               info.deviceID == testParam.adapterProperties.deviceID &&
+                               info.vendorID == testParam.adapterProperties.vendorID &&
                                info.adapterType == static_cast<WGPUAdapterType>(
-                                                       param.adapterProperties.adapterType) &&
+                                                       testParam.adapterProperties.adapterType) &&
                                std::string_view(info.device.data, info.device.length) ==
-                                   param.adapterProperties.name);
+                                   testParam.adapterProperties.name);
                 native::GetProcs().adapterInfoFreeMembers(info);
                 return result;
             });
@@ -1269,6 +1273,15 @@ bool DawnTestBase::IsMacOS(int32_t majorVersion, int32_t minorVersion) const {
 bool DawnTestBase::IsAndroid() const {
 #if DAWN_PLATFORM_IS(ANDROID)
     return true;
+#else
+    return false;
+#endif
+}
+
+bool DawnTestBase::IsAndroidOlderThan(uint32_t version) const {
+#if DAWN_PLATFORM_IS(ANDROID)
+    // Android API level == (Android version + 20)
+    return static_cast<uint32_t>(android_get_device_api_level()) < (version + 20);
 #else
     return false;
 #endif
@@ -1559,10 +1572,9 @@ wgpu::Device DawnTestBase::CreateDevice(std::string isolationKey) {
 
     adapter.RequestDevice(
         &deviceDesc, wgpu::CallbackMode::AllowSpontaneous,
-        [&apiDevice, this](wgpu::RequestDeviceStatus status, wgpu::Device device,
-                           wgpu::StringView) {
+        [&apiDevice, this](wgpu::RequestDeviceStatus status, wgpu::Device d, wgpu::StringView) {
             if (status == wgpu::RequestDeviceStatus::Success) {
-                apiDevice = std::move(device);
+                apiDevice = std::move(d);
 
                 apiDevice.SetLoggingCallback([](wgpu::LoggingType type, wgpu::StringView message) {
                     std::string_view view = {message.data, message.length};
@@ -1768,6 +1780,7 @@ void DawnTestBase::LoseDeviceForTesting(wgpu::Device deviceToLose) {
         .Times(1);
     resolvedDevice.ForceLoss(wgpu::DeviceLostReason::Unknown, "Device lost for testing");
     resolvedDevice.Tick();
+    FlushWire();
 }
 
 std::ostringstream& DawnTestBase::AddBufferExpectation(const char* file,
@@ -1951,7 +1964,8 @@ std::ostringstream& DawnTestBase::ExpectSampledFloatDataImpl(wgpu::Texture textu
 
     // Create and initialize the slot buffer so that it won't unexpectedly affect the count of
     // resources lazily cleared.
-    const std::vector<float> initialBufferData(width * height * componentCount * sampleCount, 0.f);
+    const std::vector<float> initialBufferData(
+        static_cast<size_t>(width) * height * componentCount * sampleCount, 0.f);
     wgpu::Buffer readbackBuffer = utils::CreateBufferFromData(
         device, initialBufferData.data(), sizeof(float) * initialBufferData.size(),
         wgpu::BufferUsage::CopySrc | wgpu::BufferUsage::Storage);
@@ -2146,7 +2160,7 @@ std::ostringstream& DawnTestBase::ExpectAttachmentDepthStencilTestData(
     wgpu::CommandBuffer commands = commandEncoder.Finish();
     queue.Submit(1, &commands);
 
-    std::vector<uint32_t> colorData(width * height, 1u);
+    std::vector<uint32_t> colorData(static_cast<size_t>(width) * height, 1u);
     return EXPECT_TEXTURE_EQ(colorData.data(), colorTexture, {0, 0}, {width, height});
 }
 

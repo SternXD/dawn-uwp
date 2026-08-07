@@ -33,16 +33,8 @@
 #include "absl/strings/str_format.h"
 #include "dawn/native/webgpu_absl_format_autogen.h"
 #include "src/dawn/native/dawn_platform.h"
-
-namespace dawn::detail {
-template <typename Tag, typename T>
-class TypedIntegerImpl;
-}  // namespace dawn::detail
-
-namespace dawn::ityp {
-template <typename Index, typename Value>
-class span;
-}  // namespace dawn::ityp
+#include "src/utils/numeric.h"
+#include "src/utils/span.h"
 
 namespace dawn::native {
 

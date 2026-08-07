@@ -54,6 +54,8 @@ import("meson_overrides_with_defaults.gni")
 import("//build/config/clang/clang.gni")
 import("//build/config/coverage/coverage.gni")
 
+assert(is_linux, "Meson builds are only supported on Linux")
+
 # Internal helper that sets up a meson build, i.e. runs `meson setup`
 # with appropriate args based on the environment being used by GN.
 #
@@ -77,11 +79,7 @@ template("_meson_setup") {
     _cxx_path = rebase_path("$clang_base_path/bin/clang++")
 
     # Use the glslang_validator target built from source.
-    if (host_os == "win") {
-      _glslang_path = rebase_path("$root_out_dir/glslang_validator.exe")
-    } else {
-      _glslang_path = rebase_path("$root_out_dir/glslang_validator")
-    }
+    _glslang_path = rebase_path("$root_out_dir/glslang_validator")
 
     # Used by meson to allow specifying the toolchain elements to use
     _native_file_content = [
@@ -96,12 +94,22 @@ template("_meson_setup") {
       "glslang = '${_glslang_path}'",
       "glslangValidator = '${_glslang_path}'",
     ]
+    if (is_linux) {
+      _native_file_content +=
+          [ "llvm-config = '" + rebase_path("${meson_llvm_config_bin}") + "'" ]
+    }
+
+    _zstd_pkgconfig_dir = rebase_path("${meson_zstd_dir}/lib/pkgconfig")
+    _native_file_content += [
+      "[properties]",
+      "pkg_config_path = ['${_zstd_pkgconfig_dir}']",
+    ]
 
     write_file(_native_file_path, _native_file_content)
   }
 
   action(target_name) {
-    script = "${meson_src_dir}/src/meson.py"
+    script = "${meson_src_dir}/run_meson.py"
 
     forward_variables_from(invoker,
                            [
@@ -109,6 +117,7 @@ template("_meson_setup") {
                              "public_deps",
                              "testonly",
                              "visibility",
+                             "inputs",
                            ])
 
     if (!defined(deps)) {
@@ -120,8 +129,14 @@ template("_meson_setup") {
 
     outputs = [ "${_setup_dir}/build.ninja" ]
 
+    _ninja_path = rebase_path("//third_party/ninja/ninja", root_build_dir)
+
     args = [
+      _ninja_path,
+      rebase_path("${meson_src_dir}/src/meson.py", root_build_dir),
       "setup",
+      "--reconfigure",
+      "--wrap-mode=nodownload",
       rebase_path(_setup_dir, root_build_dir),
       rebase_path(invoker.source_dir, root_build_dir),
       "--prefix=" + rebase_path("${target_gen_dir}/install"),
@@ -132,21 +147,25 @@ template("_meson_setup") {
     }
 
     if (is_clang) {
-      _c_link_args = "-fuse-ld=lld"
-      _cpp_link_args = "-fuse-ld=lld"
+      _zstd_lib_dir = rebase_path("${meson_zstd_dir}/lib", root_build_dir)
+      _zstd_include_dir =
+          rebase_path("${meson_zstd_dir}/include", root_build_dir)
+
+      _c_args = "-I${_zstd_include_dir}"
+      _cpp_args = "-I${_zstd_include_dir}"
+      _c_link_args = "-fuse-ld=lld -L${_zstd_lib_dir}"
+      _cpp_link_args = "-fuse-ld=lld -L${_zstd_lib_dir}"
+
       if (use_clang_coverage) {
-        _c_args = "-fprofile-instr-generate -fcoverage-mapping"
-        _cpp_args = "-fprofile-instr-generate -fcoverage-mapping"
+        _c_args += " -fprofile-instr-generate -fcoverage-mapping"
+        _cpp_args += " -fprofile-instr-generate -fcoverage-mapping"
         _c_link_args += " -fprofile-instr-generate -fcoverage-mapping"
         _cpp_link_args += " -fprofile-instr-generate -fcoverage-mapping"
-
-        args += [
-          "-Dc_args=${_c_args}",
-          "-Dcpp_args=${_cpp_args}",
-        ]
       }
 
       args += [
+        "-Dc_args=${_c_args}",
+        "-Dcpp_args=${_cpp_args}",
         "-Dc_link_args=${_c_link_args}",
         "-Dcpp_link_args=${_cpp_link_args}",
         "--native-file",
@@ -184,14 +203,18 @@ template("_meson_build") {
     }
     deps += [ invoker.meson_setup_target ]
 
-    script = "${meson_src_dir}/src/meson.py"
+    script = "${meson_src_dir}/run_meson.py"
 
     _setup_gen_dir =
         get_label_info(invoker.meson_setup_target, "target_gen_dir")
     _setup_name = get_label_info(invoker.meson_setup_target, "name")
     _build_dir = "${_setup_gen_dir}/${_setup_name}"
 
+    _ninja_path = rebase_path("//third_party/ninja/ninja", root_build_dir)
+
     args = [
+      _ninja_path,
+      rebase_path("${meson_src_dir}/src/meson.py", root_build_dir),
       "install",
       "-C",
       rebase_path(_build_dir, root_build_dir),
@@ -220,6 +243,7 @@ template("meson_target") {
                              "public_deps",
                              "testonly",
                              "visibility",
+                             "inputs",
                            ])
   }
 

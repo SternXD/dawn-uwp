@@ -46,7 +46,6 @@ namespace {
 
 using testing::_;
 using testing::EmptySizedString;
-using testing::InvokeWithoutArgs;
 using testing::IsNull;
 using testing::MockCppCallback;
 using testing::NonEmptySizedString;
@@ -81,8 +80,8 @@ class WireSpecificCommandTests : public WireTest {
         size_t startOffset = c2sBuf->GetOffsetForTesting();
         toIntercept();
         size_t endOffset = c2sBuf->GetOffsetForTesting();
-        std::span<const char> subrange = c2sBuf->GetContentSubrange(startOffset, endOffset);
-        dawn::wire::DeserializeBuffer deserializeBuffer(subrange.data(), subrange.size());
+        auto subrange = c2sBuf->GetContentSubrange(startOffset, endOffset);
+        dawn::wire::DeserializeBuffer deserializeBuffer(subrange);
         EXPECT_EQ(WireResult::Success, cmd.Deserialize(&deserializeBuffer, &mAllocator,
                                                        *GetWireServer()->GetImplForTesting()));
 
@@ -149,11 +148,10 @@ TEST_F(WireSpecificCommandTests, UpdateMappedDataAfterDeviceDestroy_MapWriteOffs
     // Map the buffer
     buffer.MapAsync(wgpu::MapMode::Write, 4, 4, wgpu::CallbackMode::AllowProcessEvents,
                     [](wgpu::MapAsyncStatus status, wgpu::StringView) {});
-    EXPECT_CALL(api, OnBufferMapAsync(apiBuffer, WGPUMapMode_Write, 4, 4, _))
-        .WillOnce(InvokeWithoutArgs([&] {
-            api.CallBufferMapAsyncCallback(apiBuffer, WGPUMapAsyncStatus_Success,
-                                           kEmptyOutputStringView);
-        }));
+    EXPECT_CALL(api, OnBufferMapAsync(apiBuffer, WGPUMapMode_Write, 4, 4, _)).WillOnce([&] {
+        api.CallBufferMapAsyncCallback(apiBuffer, WGPUMapAsyncStatus_Success,
+                                       kEmptyOutputStringView);
+    });
 
     FlushClient();
     FlushServer();

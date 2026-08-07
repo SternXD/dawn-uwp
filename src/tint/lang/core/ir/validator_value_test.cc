@@ -423,6 +423,60 @@ TEST_F(IR_ValidatorTest, Var_Init_InvalidAddressSpace) {
 )")) << res.Failure();
 }
 
+TEST_F(IR_ValidatorTest, Var_ExcessiveElements) {
+    auto* f = b.Function("my_func", ty.void_());
+
+    b.Append(f->Block(), [&] {
+        b.Var(ty.ptr<function>(ty.array(ty.f32(), 40000u)));
+        b.Return(f);
+    });
+
+    auto res = ir::Validate(mod);
+    ASSERT_NE(res, Success);
+    EXPECT_THAT(
+        res.Failure().reason,
+        testing::HasSubstr("type has excessive number of elements (>32767) for an initializer"))
+        << res.Failure();
+}
+
+TEST_F(IR_ValidatorTest, Construct_ExcessiveElements) {
+    auto* f = b.Function("my_func", ty.void_());
+
+    b.Append(f->Block(), [&] {
+        b.Construct(ty.array(ty.f32(), 40000u));
+        b.Return(f);
+    });
+
+    auto res = ir::Validate(mod);
+    ASSERT_NE(res, Success);
+    EXPECT_THAT(
+        res.Failure().reason,
+        testing::HasSubstr("type has excessive number of elements (>32767) for an initializer"))
+        << res.Failure();
+}
+
+TEST_F(IR_ValidatorTest, Construct_Struct_ExcessiveElements) {
+    auto* str =
+        ty.Struct(mod.symbols.New("S"), {
+                                            {mod.symbols.New("a"), ty.array(ty.f32(), 20000u)},
+                                            {mod.symbols.New("b"), ty.array(ty.f32(), 20000u)},
+                                        });
+
+    auto* f = b.Function("my_func", ty.void_());
+
+    b.Append(f->Block(), [&] {
+        b.Construct(str);
+        b.Return(f);
+    });
+
+    auto res = ir::Validate(mod);
+    ASSERT_NE(res, Success);
+    EXPECT_THAT(
+        res.Failure().reason,
+        testing::HasSubstr("type has excessive number of elements (>32767) for an initializer"))
+        << res.Failure();
+}
+
 TEST_F(IR_ValidatorTest, Var_HandleMissingBindingPoint) {
     auto* v = b.Var(ty.ptr<handle, i32>());
     mod.root_block->Append(v);
@@ -537,14 +591,7 @@ TEST_F(IR_ValidatorTest, Var_Immediate_f16) {
     mod.root_block->Append(v);
 
     auto res = ir::Validate(mod);
-    ASSERT_NE(res, Success);
-    EXPECT_THAT(
-        res.Failure().reason,
-        testing::HasSubstr(
-            R"(:2:34 error: var: vars in the 'immediate' address space cannot contain f16 types
-  %1:ptr<immediate, f16, read> = var undef
-                                 ^^^
-)")) << res.Failure();
+    ASSERT_EQ(res, Success) << res.Failure();
 }
 
 TEST_F(IR_ValidatorTest, Var_Immediate_Struct_f16) {
@@ -555,14 +602,7 @@ TEST_F(IR_ValidatorTest, Var_Immediate_Struct_f16) {
     mod.root_block->Append(v);
 
     auto res = ir::Validate(mod);
-    ASSERT_NE(res, Success);
-    EXPECT_THAT(
-        res.Failure().reason,
-        testing::HasSubstr(
-            R"(:6:32 error: var: vars in the 'immediate' address space cannot contain f16 types
-  %1:ptr<immediate, S, read> = var undef
-                               ^^^
-)")) << res.Failure();
+    ASSERT_EQ(res, Success) << res.Failure();
 }
 
 TEST_F(IR_ValidatorTest, Var_Immediate_vec3f16) {
@@ -570,14 +610,7 @@ TEST_F(IR_ValidatorTest, Var_Immediate_vec3f16) {
     mod.root_block->Append(v);
 
     auto res = ir::Validate(mod);
-    ASSERT_NE(res, Success);
-    EXPECT_THAT(
-        res.Failure().reason,
-        testing::HasSubstr(
-            R"(:2:40 error: var: vars in the 'immediate' address space cannot contain f16 types
-  %1:ptr<immediate, vec3<f16>, read> = var undef
-                                       ^^^
-)")) << res.Failure();
+    ASSERT_EQ(res, Success) << res.Failure();
 }
 
 TEST_F(IR_ValidatorTest, Var_Immediate_Multiple_SameEntryPoint) {
@@ -878,7 +911,7 @@ TEST_F(IR_ValidatorTest, Var_Struct_Location_InvalidType) {
 )")) << res.Failure();
 }
 
-TEST_F(IR_ValidatorTest, Var_Location_Struct_WithCapability) {
+TEST_F(IR_ValidatorTest, Var_Location_Struct_WithProperty) {
     auto* str_ty = ty.Struct(mod.symbols.New("MyStruct"), {
                                                               {mod.symbols.New("a"), ty.f32()},
                                                           });
@@ -891,7 +924,7 @@ TEST_F(IR_ValidatorTest, Var_Location_Struct_WithCapability) {
     ASSERT_EQ(res, Success) << res.Failure();
 }
 
-TEST_F(IR_ValidatorTest, Var_Location_Struct_WithoutCapability) {
+TEST_F(IR_ValidatorTest, Var_Location_Struct_WithoutProperty) {
     auto* str_ty = ty.Struct(mod.symbols.New("MyStruct"), {
                                                               {mod.symbols.New("a"), ty.f32()},
                                                           });
@@ -1134,7 +1167,7 @@ TEST_F(IR_ValidatorTest, Let_WrongType) {
 )")) << res.Failure();
 }
 
-TEST_F(IR_ValidatorTest, Let_VoidResultWithCapability) {
+TEST_F(IR_ValidatorTest, Let_VoidResultWithProperty) {
     auto* f = b.Function("my_func", ty.void_());
     b.Append(f->Block(), [&] {
         auto* l = mod.CreateInstruction<ir::Let>(b.InstructionResult(ty.void_()), b.Constant(1_i));
@@ -1152,7 +1185,7 @@ TEST_F(IR_ValidatorTest, Let_VoidResultWithCapability) {
 )")) << res.Failure();
 }
 
-TEST_F(IR_ValidatorTest, Let_VoidResultWithoutCapability) {
+TEST_F(IR_ValidatorTest, Let_VoidResultWithoutProperty) {
     auto* f = b.Function("my_func", ty.void_());
     b.Append(f->Block(), [&] {
         auto* l = mod.CreateInstruction<ir::Let>(b.InstructionResult(ty.void_()), b.Constant(1_i));
@@ -1169,7 +1202,7 @@ TEST_F(IR_ValidatorTest, Let_VoidResultWithoutCapability) {
 )")) << res.Failure();
 }
 
-TEST_F(IR_ValidatorTest, Let_VoidValueWithCapability) {
+TEST_F(IR_ValidatorTest, Let_VoidValueWithProperty) {
     auto* v = b.Function("void_func", ty.void_());
     b.Append(v->Block(), [&] { b.Return(v); });
 
@@ -1190,7 +1223,7 @@ TEST_F(IR_ValidatorTest, Let_VoidValueWithCapability) {
 )")) << res.Failure();
 }
 
-TEST_F(IR_ValidatorTest, Let_VoidValueWithoutCapability) {
+TEST_F(IR_ValidatorTest, Let_VoidValueWithoutProperty) {
     auto* v = b.Function("void_func", ty.void_());
     b.Append(v->Block(), [&] { b.Return(v); });
 
@@ -1255,7 +1288,7 @@ TEST_F(IR_ValidatorTest, Let_NotConstructibleValue) {
 )")) << res.Failure();
 }
 
-TEST_F(IR_ValidatorTest, Let_CapabilityBypass) {
+TEST_F(IR_ValidatorTest, Let_PropertyBypass) {
     auto* f = b.Function("my_func", ty.void_());
     auto* p = b.FunctionParam("p", ty.sampler());
     f->AppendParam(p);
@@ -1269,6 +1302,25 @@ TEST_F(IR_ValidatorTest, Let_CapabilityBypass) {
     mod.properties.Add(ir::Property::kAllowAnyLetType);
     auto res = ir::Validate(mod);
     ASSERT_EQ(res, Success) << res.Failure();
+}
+
+TEST_F(IR_ValidatorTest, Let_ExcessiveElements) {
+    auto* f = b.Function("my_func", ty.void_());
+    auto* p = b.FunctionParam("p", ty.array(ty.f32(), 40000u));
+    f->AppendParam(p);
+
+    b.Append(f->Block(), [&] {
+        b.Append(
+            mod.CreateInstruction<ir::Let>(b.InstructionResult(ty.array(ty.f32(), 40000u)), p));
+        b.Return(f);
+    });
+
+    auto res = ir::Validate(mod);
+    ASSERT_NE(res, Success);
+    EXPECT_THAT(
+        res.Failure().reason,
+        testing::HasSubstr("type has excessive number of elements (>32767) for an initializer"))
+        << res.Failure();
 }
 
 TEST_F(IR_ValidatorTest, Phony_NullValue) {
@@ -1308,7 +1360,7 @@ TEST_F(IR_ValidatorTest, Phony_EmptyValue) {
 )")) << res.Failure();
 }
 
-TEST_F(IR_ValidatorTest, Phony_MissingCapability) {
+TEST_F(IR_ValidatorTest, Phony_MissingProperty) {
     auto* v = mod.CreateInstruction<ir::Phony>(b.Constant(1_i));
 
     auto* f = b.Function("my_func", ty.void_());

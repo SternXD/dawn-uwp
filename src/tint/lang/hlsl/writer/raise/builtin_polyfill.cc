@@ -622,6 +622,7 @@ struct State {
             BitcastType{{src_type, dst_type}}, [&]() -> core::ir::Function* {
                 TINT_IR_ASSERT(ir, src_type->Is<core::type::Vector>());
 
+                ir.properties.Add(core::ir::Property::kAllow16BitIntegers);
                 auto* src_vec = src_type->As<core::type::Vector>();
                 bool src_is_u16 = src_vec->Type()->Is<core::type::U16>();
                 auto* u16_vec_ty = src_is_u16 ? src_type : ty.MatchWidth(ty.u16(), src_vec);
@@ -706,6 +707,7 @@ struct State {
             BitcastType{{src_type, dst_type}}, [&]() -> core::ir::Function* {
                 TINT_IR_ASSERT(ir, dst_type->Is<core::type::Vector>());
 
+                ir.properties.Add(core::ir::Property::kAllow16BitIntegers);
                 auto* dst_vec = dst_type->As<core::type::Vector>();
                 bool dst_is_u16 = dst_vec->Type()->Is<core::type::U16>();
                 auto* u16_vec_ty = dst_is_u16 ? dst_type : ty.MatchWidth(ty.u16(), dst_vec);
@@ -2082,6 +2084,16 @@ struct State {
             auto* offset = call->Args()[1];
             auto* stride = call->Args()[majorness_template ? 2 : 3];
 
+            // Workgroup function only take u32 args.
+            if (!offset->Type()->Is<core::type::U32>()) {
+                offset =
+                    b.Call<hlsl::ir::BuiltinCall>(ty.u32(), BuiltinFn::kAsuint, offset)->Result();
+            }
+            if (!stride->Type()->Is<core::type::U32>()) {
+                stride =
+                    b.Call<hlsl::ir::BuiltinCall>(ty.u32(), BuiltinFn::kAsuint, stride)->Result();
+            }
+
             auto* sm_ty = call->Result()->Type()->As<core::type::SubgroupMatrix>();
             TINT_IR_ASSERT(ir, sm_ty);
 
@@ -2124,6 +2136,16 @@ struct State {
             auto* offset = call->Args()[1];
             auto* matrix = call->Args()[2];
             auto* stride = call->Args()[majorness_template ? 3 : 4];
+
+            // Workgroup function only take u32 args.
+            if (!offset->Type()->Is<core::type::U32>()) {
+                offset =
+                    b.Call<hlsl::ir::BuiltinCall>(ty.u32(), BuiltinFn::kAsuint, offset)->Result();
+            }
+            if (!stride->Type()->Is<core::type::U32>()) {
+                stride =
+                    b.Call<hlsl::ir::BuiltinCall>(ty.u32(), BuiltinFn::kAsuint, stride)->Result();
+            }
 
             auto* sm_ty = matrix->Type()->As<core::type::SubgroupMatrix>();
             TINT_IR_ASSERT(ir, sm_ty);
@@ -2170,12 +2192,7 @@ struct State {
 }  // namespace
 
 Result<SuccessType> BuiltinPolyfill(core::ir::Module& ir, const BuiltinPolyfillConfig& config) {
-    AssertValid(ir,
-                core::ir::Capabilities{
-                    core::ir::Capability::kAllow8BitIntegers,
-                    core::ir::Capability::kAllow16BitIntegers,
-                },
-                "before hlsl.BuiltinPolyfill");
+    AssertValid(ir, "before hlsl.BuiltinPolyfill");
 
     State{ir, config}.Process();
 

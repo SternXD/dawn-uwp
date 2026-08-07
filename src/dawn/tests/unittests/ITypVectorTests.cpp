@@ -25,10 +25,12 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+#include <array>
+#include <ranges>
 #include <utility>
 
-#include "gtest/gtest.h"
 #include "src/dawn/common/ityp_vector.h"
+#include "src/utils/gtest.h"
 #include "src/utils/typed_integer.h"
 
 namespace dawn {
@@ -40,7 +42,13 @@ class ITypVectorTest : public testing::Test {
     using Val = TypedInteger<struct ValT, uint32_t>;
 
     using Vector = ityp::vector<Key, Val>;
+
+    // Check that ityp::vector can be used as a range.
+    static_assert(std::ranges::contiguous_range<Vector>);
 };
+
+// Name "*DeathTest" per https://google.github.io/googletest/advanced.html#death-test-naming
+using ITypVectorDeathTest = ITypVectorTest;
 
 // Test creation and initialization of the vector.
 TEST_F(ITypVectorTest, Creation) {
@@ -140,6 +148,60 @@ TEST_F(ITypVectorTest, MoveConstructAssign) {
     }
 }
 
+// Test move construction/assignment
+TEST_F(ITypVectorTest, Assign) {
+    // Test assign with a count and value.
+    {
+        Vector vec;
+        vec.assign(Key(3u), Val(2u));
+        ASSERT_EQ(vec.size(), Key(3u));
+        ASSERT_EQ(vec[Key(0u)], Val(2u));
+        ASSERT_EQ(vec[Key(1u)], Val(2u));
+        ASSERT_EQ(vec[Key(2u)], Val(2u));
+    }
+    // Test assign with an initializer list.
+    {
+        Vector vec;
+        vec.assign({Val(2u), Val(8u), Val(1u)});
+        ASSERT_EQ(vec.size(), Key(3u));
+        ASSERT_EQ(vec[Key(0u)], Val(2u));
+        ASSERT_EQ(vec[Key(1u)], Val(8u));
+        ASSERT_EQ(vec[Key(2u)], Val(1u));
+    }
+    // Test assign with two iterators.
+    {
+        std::array<Val, 3u> data = {Val(2u), Val(8u), Val(1u)};
+
+        Vector vec;
+        vec.assign(data.begin(), data.end());
+        ASSERT_EQ(vec.size(), Key(3u));
+        ASSERT_EQ(vec[Key(0u)], Val(2u));
+        ASSERT_EQ(vec[Key(1u)], Val(8u));
+        ASSERT_EQ(vec[Key(2u)], Val(1u));
+    }
+}
+
+TEST_F(ITypVectorDeathTest, AssignTooManyElements) {
+    using Key8 = TypedInteger<struct Key8T, uint8_t>;
+    using Vector8 = ityp::vector<Key8, Val>;
+
+    // Control case: assigning exactly at the limit of what Index can hold.
+    {
+        std::array<Val, 255> data = {};
+        Vector8 vec;
+        vec.assign(data.begin(), data.end());
+    }
+    // Error case: assigning exactly at the limit of what Index can hold.
+    {
+        std::array<Val, 256> data = {};
+        Vector8 vec;
+        EXPECT_DEATH_IF_SUPPORTED(vec.assign(data.begin(), data.end()), "");
+    }
+
+    // Note: not testing for assign with an std::initializer_list since it would require writing out
+    // a list of 255 or 256 elements.
+}
+
 // Test that values can be set at an index and retrieved from the same index.
 TEST_F(ITypVectorTest, Indexing) {
     Vector vec(Key(10u));
@@ -230,9 +292,6 @@ TEST_F(ITypVectorTest, BoolVectorIndexing) {
     }
 }
 
-// Name "*DeathTest" per https://google.github.io/googletest/advanced.html#death-test-naming
-using ITypVectorDeathTest = ITypVectorTest;
-
 // Out of bounds accesses should crash even in release (the underlying container
 // should have asserts enabled).
 TEST_F(ITypVectorDeathTest, OutOfBounds) {
@@ -243,13 +302,13 @@ TEST_F(ITypVectorDeathTest, OutOfBounds) {
 
     Vector vec(Key(10u), Val(7u));
     vec[Key(9u)];
-    EXPECT_DEATH(vec[Key(10u)], "");
-    EXPECT_DEATH(vec.at(Key(10u)), "");
+    EXPECT_DEATH_IF_SUPPORTED(vec[Key(10u)], "");
+    EXPECT_DEATH_IF_SUPPORTED(vec.at(Key(10u)), "");
 
     const Vector& constVec = vec;
     constVec[Key(9u)];
-    EXPECT_DEATH(constVec[Key(10u)], "");
-    EXPECT_DEATH(constVec.at(Key(10u)), "");
+    EXPECT_DEATH_IF_SUPPORTED(constVec[Key(10u)], "");
+    EXPECT_DEATH_IF_SUPPORTED(constVec.at(Key(10u)), "");
 }
 
 // If the index/size is 64-bit, it needs to be narrowed to size_t. Verify that's checked correctly.
@@ -263,22 +322,22 @@ TEST_F(ITypVectorDeathTest, OversizedIndex) {
     static constexpr Key64 kHugeKey64{0x1000'0000'0000'0000u};
 
     // Crash either due to OOM (on 64-bit) or due to narrowing (on 32-bit).
-    EXPECT_DEATH((ityp::vector<Key64, Val>(kHugeKey64)), "");
-    EXPECT_DEATH((ityp::vector<Key64, Val>(kHugeKey64, Val(7u))), "");
+    EXPECT_DEATH_IF_SUPPORTED((ityp::vector<Key64, Val>(kHugeKey64)), "");
+    EXPECT_DEATH_IF_SUPPORTED((ityp::vector<Key64, Val>(kHugeKey64, Val(7u))), "");
 
     ityp::vector<Key64, Val> vec(Key64(10u), Val(7u));
 
     vec[Key64(9u)];
     // Regular out-of-bounds.
-    EXPECT_DEATH(vec[Key64(10u)], "");
+    EXPECT_DEATH_IF_SUPPORTED(vec[Key64(10u)], "");
 
     vec[Key64(0u)];
     // If this were cast to a 32-bit size_t without a check, it would be in-bounds.
-    EXPECT_DEATH(vec[kHugeKey64], "");
+    EXPECT_DEATH_IF_SUPPORTED(vec[kHugeKey64], "");
 
-    EXPECT_DEATH(vec.resize(kHugeKey64), "");
-    EXPECT_DEATH(vec.resize(kHugeKey64, Val(7u)), "");
-    EXPECT_DEATH(vec.reserve(kHugeKey64), "");
+    EXPECT_DEATH_IF_SUPPORTED(vec.resize(kHugeKey64), "");
+    EXPECT_DEATH_IF_SUPPORTED(vec.resize(kHugeKey64, Val(7u)), "");
+    EXPECT_DEATH_IF_SUPPORTED(vec.reserve(kHugeKey64), "");
 }
 
 }  // anonymous namespace

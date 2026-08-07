@@ -38,6 +38,34 @@ namespace {
 constexpr uint32_t kRTSize = 16;
 constexpr wgpu::TextureFormat kFormat = wgpu::TextureFormat::RGBA8Unorm;
 
+// Passes if the pixel matches any of the given candidate colors.
+class ExpectEqualToOneOf : public detail::CustomTextureExpectation {
+  public:
+    explicit ExpectEqualToOneOf(std::vector<utils::RGBA8> candidates)
+        : mCandidates(std::move(candidates)) {}
+
+    uint32_t DataSize() override { return sizeof(utils::RGBA8); }
+
+    testing::AssertionResult Check(const void* data, size_t size) override {
+        DAWN_ASSERT(size == DataSize());
+        utils::RGBA8 actual = *static_cast<const utils::RGBA8*>(data);
+        for (const utils::RGBA8& candidate : mCandidates) {
+            if (actual == candidate) {
+                return testing::AssertionSuccess();
+            }
+        }
+        testing::AssertionResult result = testing::AssertionFailure();
+        result << "Expected " << actual << " to equal one of:";
+        for (const utils::RGBA8& candidate : mCandidates) {
+            result << " " << candidate;
+        }
+        return result;
+    }
+
+  private:
+    std::vector<utils::RGBA8> mCandidates;
+};
+
 class RenderPassTest : public DawnTest {
   protected:
     void SetUp() override {
@@ -336,7 +364,8 @@ TEST_P(RenderPassTest, ClearMultisubresourceAfterWriteDepth16Unorm) {
 
                     // Use a distinct value for each subresource.
                     uint16_t value = level * 10 + layer;
-                    std::vector<uint16_t> data(copySize.width * copySize.height, value);
+                    std::vector<uint16_t> data(
+                        static_cast<size_t>(copySize.width) * copySize.height, value);
                     queue.WriteTexture(&texelCopyTextureInfo, data.data(),
                                        data.size() * sizeof(uint16_t), &texelCopyBufferLayout,
                                        &copySize);
@@ -395,7 +424,8 @@ TEST_P(RenderPassTest, ClearMultisubresourceAfterWriteDepth16Unorm) {
                     uint32_t mipHeight = height >> level;
                     if (cleared) {
                         // Check the subresource is cleared as expected.
-                        std::vector<uint16_t> data(mipWidth * mipHeight, 0xCCCC);
+                        std::vector<uint16_t> data(static_cast<size_t>(mipWidth) * mipHeight,
+                                                   0xCCCC);
                         EXPECT_TEXTURE_EQ(data.data(), tex, {0, 0, layer}, {mipWidth, mipHeight},
                                           level)
                             << "cleared texture data should have been 0xCCCC at:" << "\nlayer: "
@@ -405,7 +435,8 @@ TEST_P(RenderPassTest, ClearMultisubresourceAfterWriteDepth16Unorm) {
                         // Without the workaround, they are 0.
                         uint16_t value =
                             level * 10 + layer;  // Compute the expected value for the subresource.
-                        std::vector<uint16_t> data(mipWidth * mipHeight, value);
+                        std::vector<uint16_t> data(static_cast<size_t>(mipWidth) * mipHeight,
+                                                   value);
                         EXPECT_TEXTURE_EQ(data.data(), tex, {0, 0, layer}, {mipWidth, mipHeight},
                                           level)
                             << "written texture data should still be " << value
@@ -545,6 +576,106 @@ TEST_P(RenderPassRenderAreaTest, ClipsClearNonAligned) {
 DAWN_INSTANTIATE_TEST(RenderPassRenderAreaTest,
                       VulkanBackend({"vulkan_use_dynamic_rendering"}, {}),
                       VulkanBackend({}, {"vulkan_use_dynamic_rendering"}));
+
+class RenderPassTestWithUndefinedLoadStoreOp : public RenderPassTest {
+  protected:
+    void SetUp() override {
+        RenderPassTest::SetUp();
+
+        // Skip all tests if the DawnAllowUndefinedLoadStoreOp feature is not supported.
+        DAWN_TEST_UNSUPPORTED_IF(
+            !SupportsFeatures({wgpu::FeatureName::DawnAllowUndefinedLoadStoreOp}));
+    }
+
+    std::vector<wgpu::FeatureName> GetRequiredFeatures() override {
+        std::vector<wgpu::FeatureName> requiredFeatures = {};
+        if (SupportsFeatures({wgpu::FeatureName::DawnAllowUndefinedLoadStoreOp})) {
+            requiredFeatures.push_back(wgpu::FeatureName::DawnAllowUndefinedLoadStoreOp);
+        }
+        return requiredFeatures;
+    }
+};
+
+// Test using LoadOp::Undefined
+TEST_P(RenderPassTestWithUndefinedLoadStoreOp, LoadOpUndefined) {
+    wgpu::Texture renderTarget = CreateDefault2DTexture();
+    wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
+
+    {
+        // In the first render pass we clear renderTarget to red.
+        utils::ComboRenderPassDescriptor renderPass({renderTarget.CreateView()});
+        renderPass.cColorAttachments[0].clearValue = {1.0f, 0.0f, 0.0f, 1.0f};
+
+        wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&renderPass);
+        pass.End();
+    }
+
+    {
+        // In the second render pass we use LoadOp::Undefined, which will be converted to either
+        // Load or Clear depending on the backend's preference.
+        utils::ComboRenderPassDescriptor renderPass({renderTarget.CreateView()});
+        renderPass.cColorAttachments[0].loadOp = wgpu::LoadOp::Undefined;
+
+        wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&renderPass);
+        pass.End();
+    }
+
+    wgpu::CommandBuffer commands = encoder.Finish();
+    queue.Submit(1, &commands);
+
+    // If Undefined was converted to Load, the color from the 1st render pass should be intact
+    // (kRed). If it was converted to Clear, the texture is cleared with default zero values
+    // (kZero). Either is a valid outcome.
+    EXPECT_TEXTURE_EQ(new ExpectEqualToOneOf({utils::RGBA8::kRed, utils::RGBA8::kZero}),
+                      renderTarget, {1, kRTSize - 1, 0}, {1, 1, 1});
+    EXPECT_TEXTURE_EQ(new ExpectEqualToOneOf({utils::RGBA8::kRed, utils::RGBA8::kZero}),
+                      renderTarget, {kRTSize - 1, 1, 0}, {1, 1, 1});
+}
+
+// Test using StoreOp::Undefined
+TEST_P(RenderPassTestWithUndefinedLoadStoreOp, StoreOpUndefined) {
+    wgpu::Texture renderTarget = CreateDefault2DTexture();
+    wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
+
+    {
+        // In the first render pass we clear renderTarget to red and store with Undefined.
+        utils::ComboRenderPassDescriptor renderPass({renderTarget.CreateView()});
+        renderPass.cColorAttachments[0].clearValue = {1.0f, 0.0f, 0.0f, 1.0f};
+        renderPass.cColorAttachments[0].storeOp = wgpu::StoreOp::Undefined;
+
+        wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&renderPass);
+        pass.End();
+    }
+
+    {
+        // In the second render pass we use LoadOp::Load, so the result depends on whether
+        // StoreOp::Undefined was converted to Store or Discard in the 1st render pass.
+        utils::ComboRenderPassDescriptor renderPass({renderTarget.CreateView()});
+        renderPass.cColorAttachments[0].loadOp = wgpu::LoadOp::Load;
+
+        wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&renderPass);
+        pass.End();
+    }
+
+    wgpu::CommandBuffer commands = encoder.Finish();
+    queue.Submit(1, &commands);
+
+    // If Undefined was converted to Store, the color from the 1st render pass should be intact
+    // (kRed). If it was converted to Discard, the texture is left with default zero values
+    // (kZero). Either is a valid outcome.
+    EXPECT_TEXTURE_EQ(new ExpectEqualToOneOf({utils::RGBA8::kRed, utils::RGBA8::kZero}),
+                      renderTarget, {1, kRTSize - 1, 0}, {1, 1, 1});
+    EXPECT_TEXTURE_EQ(new ExpectEqualToOneOf({utils::RGBA8::kRed, utils::RGBA8::kZero}),
+                      renderTarget, {kRTSize - 1, 1, 0}, {1, 1, 1});
+}
+
+DAWN_INSTANTIATE_TEST(RenderPassTestWithUndefinedLoadStoreOp,
+                      D3D11Backend(),
+                      D3D12Backend(),
+                      MetalBackend(),
+                      OpenGLBackend(),
+                      OpenGLESBackend(),
+                      VulkanBackend());
 
 }  // anonymous namespace
 }  // namespace dawn

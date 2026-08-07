@@ -40,9 +40,9 @@ using namespace tint::core::fluent_types;     // NOLINT
 using namespace tint::core::number_suffixes;  // NOLINT
 
 struct IR_ArrayOffsetFromUniformTest : core::ir::transform::TransformTest {
-    IR_ArrayOffsetFromUniformTest() {
-        capabilities = kArrayOffsetFromUniformCapabilities;
-        mod.properties.Add(core::ir::Property::kAllowNonCoreTypes);
+    IR_ArrayOffsetFromUniformTest() {  //
+        mod.properties.Add(core::ir::Property::kAllow16BitFloats,
+                           core::ir::Property::kAllowNonCoreTypes);
     }
 };
 

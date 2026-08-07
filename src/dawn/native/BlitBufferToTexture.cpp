@@ -311,8 +311,7 @@ ResultOrError<Ref<RenderPipelineBase>> GetOrCreatePipeline(DeviceBase* device,
     colorTarget.format = format;
     colorTarget.writeMask = wgpu::ColorWriteMask::All;
 
-    fragmentState.targetCount = 1;
-    fragmentState.targets = &colorTarget;
+    fragmentState.targets = SpanFromRef<ColorAttachmentIndex>(colorTarget);
 
     RenderPipelineDescriptor renderPipelineDesc = {};
     renderPipelineDesc.label = "blit_buffer_to_texture";
@@ -459,8 +458,8 @@ MaybeError BlitBufferToTexture(DeviceBase* device,
             DAWN_TRY_ASSIGN(dstView, dst.texture->CreateView(&viewDesc));
         }
 
-        const uint64_t srcOffset =
-            src.offset + dchecked_cast<uint32_t>(z) * src.rowsPerImage * src.bytesPerRow;
+        const uint64_t srcOffset = src.offset + static_cast<uint64_t>(dchecked_cast<uint32_t>(z)) *
+                                                    src.rowsPerImage * src.bytesPerRow;
         const uint64_t srcBufferBindingOffset = AlignDown(srcOffset, ssboAlignment);
         const uint32_t shaderReadOffset = static_cast<uint32_t>(srcOffset & (ssboAlignment - 1));
         Ref<BufferBase> paramsBuffer;
@@ -468,14 +467,13 @@ MaybeError BlitBufferToTexture(DeviceBase* device,
             DAWN_TRY_ASSIGN(paramsBuffer,
                             device->GetOrCreateTemporaryUniformBuffer(sizeof(uint32_t) * 4));
 
-            uint32_t params[4];
+            std::array<uint32_t, 4> params;
             params[0] = shaderReadOffset;
             params[1] = src.bytesPerRow;
             params[2] = dchecked_cast<uint32_t>(dst.origin.x);
             params[3] = dchecked_cast<uint32_t>(dst.origin.y);
             commandEncoder->APIWriteBuffer(paramsBuffer.Get(), 0,
-                                           reinterpret_cast<const uint8_t*>(&params[0]),
-                                           sizeof(params));
+                                           SpanAsBytes(Span<const uint32_t>(params)));
         }
 
         Ref<BindGroupBase> bindGroup;
@@ -495,8 +493,7 @@ MaybeError BlitBufferToTexture(DeviceBase* device,
         colorAttachment.storeOp = wgpu::StoreOp::Store;
 
         RenderPassDescriptor rpDesc = {};
-        rpDesc.colorAttachmentCount = 1;
-        rpDesc.colorAttachments = &colorAttachment;
+        rpDesc.colorAttachments = SpanFromRef<ColorAttachmentIndex>(colorAttachment);
 
         Ref<RenderPassEncoder> pass = commandEncoder->BeginRenderPass(&rpDesc);
         // Bind the resources.
